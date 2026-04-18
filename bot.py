@@ -366,7 +366,7 @@ def attack(msg):
     
     threading.Thread(target=run).start()
 
-@bot.message_handler(commands=['status'])
+   @bot.message_handler(commands=['status'])
 def status(msg):
     uid = str(msg.chat.id)
     
@@ -520,7 +520,21 @@ def remove_user(msg):
         bot.reply_to(msg, "❌ User not found!")
         return
     
-    remove_user_from_system(target_user)
+    users.remove(target_user)
+    users_data["users"] = users
+    save_users(users_data)
+    
+    if target_user in resellers:
+        resellers.remove(target_user)
+        users_data["resellers"] = resellers
+        save_users(users_data)
+    
+    for attack_id in list(active_attacks.keys()):
+        if active_attacks[attack_id]["user"] == target_user:
+            del active_attacks[attack_id]
+    
+    if target_user in cooldown:
+        del cooldown[target_user]
     
     bot.reply_to(msg, "✅ USER REMOVED!\n\n👤 User: " + target_user + "\n❌ Attack access revoked!")
     
@@ -529,7 +543,7 @@ def remove_user(msg):
     except:
         pass
 
-    @bot.message_handler(commands=['addreseller'])
+@bot.message_handler(commands=['addreseller'])
 def add_reseller(msg):
     uid = str(msg.chat.id)
     
@@ -876,4 +890,4 @@ cleanup_thread.start()
 
 print("XSILENT BOT STARTED - Owner: 8487946379")
 
-bot.infinity_polling()
+bot.infinity_polling()     
