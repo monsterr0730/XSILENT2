@@ -365,8 +365,7 @@ def attack(msg):
                 del active_attacks[attack_id]
     
     threading.Thread(target=run).start()
-
-   @bot.message_handler(commands=['status'])
+    @bot.message_handler(commands=['status'])
 def status(msg):
     uid = str(msg.chat.id)
     
