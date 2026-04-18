@@ -723,4 +723,3 @@ cleanup_thread.start()
 print("XSILENT BOT STARTED - Owner: 8487946379")
 
 bot.infinity_polling()
-```
