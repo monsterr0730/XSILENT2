@@ -662,9 +662,9 @@ def help_cmd(msg):
     uid = str(msg.chat.id)
     
     if uid in ADMIN_ID:
-        bot.reply_to(msg, "🔥 OWNER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1 (1 day)\n/genkey 5h (5 hours)\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/api_status")
+        bot.reply_to(msg, "🔥 OWNER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/api_status")
     elif uid in resellers:
-        bot.reply_to(msg, "🔥 RESELLER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1 (1 day)\n/genkey 5h (5 hours)\n/mykeys")
+        bot.reply_to(msg, "🔥 RESELLER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
     elif uid in users:
         bot.reply_to(msg, "🔥 USER HELP\n\n/attack IP PORT TIME\n/status\n/redeem KEY")
     else:
@@ -724,4 +724,3 @@ cleanup_thread.start()
 print("XSILENT BOT STARTED - Owner: 8487946379")
 
 bot.infinity_polling()
-```
