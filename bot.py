@@ -529,7 +529,7 @@ def remove_user(msg):
     except:
         pass
 
-@bot.message_handler(commands=['addreseller'])
+    @bot.message_handler(commands=['addreseller'])
 def add_reseller(msg):
     uid = str(msg.chat.id)
     
@@ -616,15 +616,18 @@ def add_group(msg):
         return
     
     group_id = args[1]
-    attack_time = int(args[2])
+    try:
+        attack_time = int(args[2])
+    except:
+        bot.reply_to(msg, "❌ Invalid time!")
+        return
     
     if attack_time < 10 or attack_time > 300:
         bot.reply_to(msg, "❌ Attack time must be between 10-300 seconds!")
         return
     
     save_group(group_id, attack_time, uid)
-    
-    bot.reply_to(msg, "✅ GROUP ADDED!\n\n👥 Group ID: " + group_id + "\n⏱️ Attack Time: " + str(attack_time) + "s\n\nAll members can now use /attack IP PORT")
+    bot.reply_to(msg, "✅ GROUP ADDED!\n\n👥 Group ID: " + group_id + "\n⏱️ Attack Time: " + str(attack_time) + "s")
 
 @bot.message_handler(commands=['removegroup'])
 def remove_group_cmd(msg):
@@ -641,7 +644,6 @@ def remove_group_cmd(msg):
     
     group_id = args[1]
     remove_group(group_id)
-    
     bot.reply_to(msg, "✅ GROUP REMOVED!\nGroup ID: " + group_id)
 
 @bot.message_handler(commands=['allgroups'])
@@ -873,8 +875,5 @@ cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
 cleanup_thread.start()
 
 print("XSILENT BOT STARTED - Owner: 8487946379")
-print("MongoDB Connected - Groups Loaded: " + str(len(groups)))
 
 bot.infinity_polling()
-```
-        
