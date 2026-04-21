@@ -892,5 +892,3 @@ print("👑 Owner: 8487946379")
 print("🛒 Buy: @JAAT43")
 
 bot.infinity_polling()
-```
-                    
