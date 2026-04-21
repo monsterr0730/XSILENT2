@@ -1256,5 +1256,3 @@ print("🛒 Buy: XSILENT")
 print(f"📊 Hosted Bots: {len(hosted_bots)}")
 
 bot.infinity_polling()
-```
-  
