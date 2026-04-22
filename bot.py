@@ -811,10 +811,10 @@ def attack(msg):
                     time.sleep(2)
                     continue
                 bot.send_message(msg.chat.id, f"❌ **Attack failed! API offline.**\n\n🛒 Contact: XSILENT", parse_mode='Markdown')
-          if attack_id in active_attacks:
+                  if attack_id in active_attacks:
             del active_attacks[attack_id]
     
-                threading.Thread(target=run).start()
+    threading.Thread(target=run).start()
 
 @bot.message_handler(commands=['status'])
 def status(msg):
@@ -830,7 +830,6 @@ def status(msg):
     
     slots_status = format_attack_status()
     total_active = check_total_active_attacks()
-    
     status_msg = "📊 **SLOT STATUS**\n\n"
     status_msg += "\n\n".join(slots_status)
     status_msg += f"\n\n📊 **TOTAL ACTIVE:** `{total_active}/{MAX_CONCURRENT}`"
