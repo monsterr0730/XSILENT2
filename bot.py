@@ -811,7 +811,7 @@ def attack(msg):
                     time.sleep(2)
                     continue
                 bot.send_message(msg.chat.id, f"❌ **Attack failed! API offline.**\n\n🛒 Contact: XSILENT", parse_mode='Markdown')
-                  if attack_id in active_attacks:
+        if attack_id in active_attacks:
             del active_attacks[attack_id]
     
     threading.Thread(target=run).start()
@@ -822,10 +822,6 @@ def status(msg):
     
     if check_maintenance():
         bot.reply_to(msg, maintenance_message, parse_mode='Markdown')
-        return
-    
-    if uid not in users and uid not in ADMIN_ID and uid not in resellers:
-        bot.reply_to(msg, "❌ **Unauthorized!**", parse_mode='Markdown')
         return
     
     slots_status = format_attack_status()
