@@ -814,7 +814,7 @@ def attack(msg):
           if attack_id in active_attacks:
             del active_attacks[attack_id]
     
-    threading.Thread(target=run).start()
+                threading.Thread(target=run).start()
 
 @bot.message_handler(commands=['status'])
 def status(msg):
