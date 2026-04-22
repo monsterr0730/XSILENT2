@@ -1539,4 +1539,3 @@ print(f"⏳ Cooldown: {COOLDOWN_TIME}s")
 print(f"📊 Hosted Bots: {len(hosted_bots)}")
 
 bot.infinity_polling()
-```
