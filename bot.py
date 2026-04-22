@@ -1,6 +1,3 @@
-Here is the complete fixed bot.py with all fixes:
-
-```python
 #!/usr/bin/env python3
 import telebot
 import requests
