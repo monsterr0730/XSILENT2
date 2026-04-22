@@ -13,10 +13,10 @@ from collections import defaultdict
 from pymongo import MongoClient
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8291785662:AAHGx6agafiRPyifOm9-ooBXKH9NGiTv7uI"
+BOT_TOKEN = "8760406918:AAGwdutTqzAU6_U9IJNiOlNhgOrc2emJ5io"
 ADMIN_ID = ["8487946379"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
-API_KEY = "PFC10J"
+API_KEY = "WTRMWL"
 MAX_CONCURRENT = 2
 COOLDOWN_TIME = 30
 BUY_CONTACT = "XSILENT"
