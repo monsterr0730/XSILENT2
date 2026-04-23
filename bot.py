@@ -516,26 +516,26 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 hosted_bots[bot_token] = {"resellers": []}
             if "resellers" not in hosted_bots[bot_token]:
                 hosted_bots[bot_token]["resellers"] = []
-                        if new_reseller not in hosted_bots[bot_token]["resellers"]:
-                hosted_bots[bot_token]["resellers"].append(new_reseller)
-                hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
-            else:
-                hosted_bot.reply_to(msg, "❌ User is already a reseller!")
-        
-        @hosted_bot.message_handler(commands=['removereseller'])
-        def hosted_remove_reseller(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
-            uid = str(msg.chat.id)
-            if uid != owner_id:
-                hosted_bot.reply_to(msg, "❌ Only bot owner can remove resellers!")
-                return
-            args = msg.text.split()
-            if len(args) != 2:
-                hosted_bot.reply_to(msg, "⚠️ Usage: /removereseller USER_ID")
-                return
-            target = args[1]
+                if new_reseller not in hosted_bots[bot_token]["resellers"]:
+        hosted_bots[bot_token]["resellers"].append(new_reseller)
+        hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
+    else:
+        hosted_bot.reply_to(msg, "❌ User is already a reseller!")
+
+@hosted_bot.message_handler(commands=['removereseller'])
+def hosted_remove_reseller(msg):
+    if is_bot_blocked():
+        blocked_reply(msg.chat.id)
+        return
+    uid = str(msg.chat.id)
+    if uid != owner_id:
+        hosted_bot.reply_to(msg, "❌ Only bot owner can remove resellers!")
+        return
+    args = msg.text.split()
+    if len(args) != 2:
+        hosted_bot.reply_to(msg, "⚠️ Usage: /removereseller USER_ID")
+        return
+    target = args[1]
             if bot_token in hosted_bots and "resellers" in hosted_bots[bot_token]:
                 if target in hosted_bots[bot_token]["resellers"]:
                     hosted_bots[bot_token]["resellers"].remove(target)
