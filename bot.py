@@ -496,7 +496,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             else:
                 status_msg = "✅ ALL SLOTS FREE ✅\n\n└ 💡 No ongoing attacks detected!\n└ 🚀 Use /attack IP PORT TIME to start"
             
-                    hosted_bot.reply_to(msg, "❌ User is already a reseller!")
+            hosted_bot.reply_to(msg, "❌ User is already a reseller!")
 
 @hosted_bot.message_handler(commands=['removereseller'])
 def hosted_remove_reseller(msg):
