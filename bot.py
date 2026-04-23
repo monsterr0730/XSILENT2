@@ -16,7 +16,7 @@ import sys
 
 # ========== CONFIG ==========
 BOT_TOKEN = "8291785662:AAEiYDUXeozyetHx5QGoZKJ7z45OVs1-BzY"
-ADMIN_ID = ["8487946379"]
+ADMIN_ID = ["8487946379" ]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
 API_KEY = "WTRMWL"
 DEFAULT_CONCURRENT = 2
