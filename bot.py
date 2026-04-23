@@ -499,24 +499,24 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             hosted_bot.reply_to(msg, status_msg)
         
         @hosted_bot.message_handler(commands=['addreseller'])
-        def hosted_add_reseller(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
-            uid = str(msg.chat.id)
-            if uid != owner_id:
-                hosted_bot.reply_to(msg, "❌ Only bot owner can add resellers!")
-                return
-            args = msg.text.split()
-            if len(args) != 2:
-                hosted_bot.reply_to(msg, "⚠️ Usage: /addreseller USER_ID")
-                return
-            new_reseller = args[1]
-            if bot_token not in hosted_bots:
-                hosted_bots[bot_token] = {"resellers": []}
-            if "resellers" not in hosted_bots[bot_token]:
-                hosted_bots[bot_token]["resellers"] = []
-            if new_reseller not in hosted_bots[bot_token]["resellers"]:
+def hosted_add_reseller(msg):
+    if is_bot_blocked():
+        blocked_reply(msg.chat.id)
+        return
+    uid = str(msg.chat.id)
+    if uid != owner_id:
+        hosted_bot.reply_to(msg, "❌ Only bot owner can add resellers!")
+        return
+    args = msg.text.split()
+    if len(args) != 2:
+        hosted_bot.reply_to(msg, "⚠️ Usage: /addreseller USER_ID")
+        return
+    new_reseller = args[1]
+    if bot_token not in hosted_bots:
+        hosted_bots[bot_token] = {"resellers": []}
+    if "resellers" not in hosted_bots[bot_token]:
+        hosted_bots[bot_token]["resellers"] = []
+    if new_reseller not in hosted_bots[bot_token]["resellers"]:
         hosted_bots[bot_token]["resellers"].append(new_reseller)
         hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
     else:
