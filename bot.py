@@ -516,7 +516,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 hosted_bots[bot_token] = {"resellers": []}
             if "resellers" not in hosted_bots[bot_token]:
                 hosted_bots[bot_token]["resellers"] = []
-                if new_reseller not in hosted_bots[bot_token]["resellers"]:
+            if new_reseller not in hosted_bots[bot_token]["resellers"]:
         hosted_bots[bot_token]["resellers"].append(new_reseller)
         hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
     else:
