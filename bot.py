@@ -498,7 +498,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             
             hosted_bot.reply_to(msg, status_msg)
         
-        @hosted_bot.message_handler(commands=['addreseller'])
+@hosted_bot.message_handler(commands=['addreseller'])
 def hosted_add_reseller(msg):
     if is_bot_blocked():
         blocked_reply(msg.chat.id)
