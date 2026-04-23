@@ -821,6 +821,7 @@ def stats(msg):
     bot.reply_to(msg, "📊 YOUR STATS\n\n👤 ID: " + uid + "\n✅ Status: " + status_text + "\n⏰ Cooldown: " + cooldown_text)
 
 @bot.message_handler(commands=['help'])
+@bot.message_handler(commands=['help'])
 def help_cmd(msg):
     uid = str(msg.chat.id)
     chat_type = msg.chat.type
@@ -829,13 +830,13 @@ def help_cmd(msg):
         bot.reply_to(msg, "🔥 GROUP HELP\n\n/attack IP PORT - Launch attack\n/help - This menu\n/start - Bot info")
     elif uid in ADMIN_ID:
         bot.reply_to(msg, "🔥 OWNER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/removekey KEY\n/add USER\n/remove USER\n/addreseller USER\n/removereseller USER\n/addgroup GROUP_ID TIME\n/removegroup GROUP_ID\n/broadcast MSG\n/stopattack IP:PORT\n/allusers\n/allgroups\n/api_status")
-        elif uid in resellers:
+    elif uid in resellers:
         bot.reply_to(msg, "🔥 RESELLER HELP\n\n/attack IP PORT TIME\n/status\n/genkey 1\n/genkey 5h\n/mykeys")
     elif uid in users:
         bot.reply_to(msg, "🔥 USER HELP\n\n/attack IP PORT TIME\n/status\n/redeem KEY")
     else:
         bot.reply_to(msg, "❌ Unauthorized! Use /redeem KEY")
-
+        
 @bot.message_handler(commands=['allusers'])
 def all_users(msg):
     if str(msg.chat.id) not in ADMIN_ID:
