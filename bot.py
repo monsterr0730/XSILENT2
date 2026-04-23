@@ -1590,3 +1590,18 @@ def main():
     application.add_handler(CommandHandler("addgroup", addgroup_command))
     application.add_handler(CommandHandler("removegroup", removegroup_command))
     application.add_handler(CommandHandler("groups", groups_command))
+    application.add_handler(CommandHandler("users", admin_users_command))
+    application.add_handler(CommandHandler("api_status", api_status_command))
+    application.add_handler(CommandHandler("running", running_command))
+    application.add_handler(CommandHandler("stats", bot_stats_command))
+    application.add_handler(CommandHandler("set_concurrent", set_concurrent_command))
+    
+    # Setup post_init
+    application.post_init = post_init
+    
+    # Start bot
+    print("✅ Bot is running...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
