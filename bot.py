@@ -27,12 +27,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-MONGODB_URI = os.getenv("MONGODB_URI")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "attack_bot")
-API_URL = os.getenv("API_URL")
-API_KEY = os.getenv("API_KEY")
-ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "1793697840").split(",")]
+BOT_TOKEN = os.getenv("8291785662:AAE4N2cxu1TqLr8xRv-zX2wGWvECNaTq400")
+MONGODB_URI = os.getenv("mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER")
+DATABASE_NAME = os.getenv("XSilent_bot", "attack_bot")
+API_URL = os.getenv("http://cnc.teamc2.xyz:5001/api/attack")
+API_KEY = os.getenv("PFC10J")
+ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "8487946379").split(",")]
 
 # Blocked ports
 BLOCKED_PORTS = {8700, 20000, 443, 17500, 9031, 20002, 20001}
