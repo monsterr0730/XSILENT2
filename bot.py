@@ -859,10 +859,10 @@ def attack(msg):
     if total_active >= MAX_CONCURRENT:
         bot.reply_to(msg, f"❌ All attack slots are full!\n📊 Total active: {total_active}/{MAX_CONCURRENT}\n💡 Use /status to check")
         return
-    
+      
     if uid in cooldown and not is_group:
         remaining = COOLDOWN_TIME - (time.time() - cooldown[uid])
-                if remaining > 0:
+        if remaining > 0:
             bot.reply_to(msg, f"⏳ Wait {int(remaining)} seconds!\n💡 Use /cooldown to check")
             return
     
