@@ -845,7 +845,7 @@ def set_max_concurrent(msg):
     settings["max_concurrent"] = new_max
     save_settings(settings)
     
-    bot.reply_to(msg, f"✅ MAX CONCURRENT UPDATED!\n\n⚡ New Value: {MAX_CONCURRENT}")
+    bot.reply_to(msg, f"✅ GLOBAL CONCURRENT UPDATED!\n\n⚡ New Value: {MAX_CONCURRENT}\n🌐 Total attacks across ALL bots cannot exceed {MAX_CONCURRENT}\n💡 Use /status to see changes")
 
 @bot.message_handler(commands=['attack'])
 def attack(msg):
@@ -1671,3 +1671,4 @@ print(f"📊 Hosted Bots: {len(hosted_bots)}")
 print("=" * 50)
 
 bot.infinity_polling()
+        
