@@ -1132,7 +1132,7 @@ def add_user(msg):
     
     args = msg.text.split()
     if len(args) != 2:
-                bot.reply_to(msg, "⚠️ Usage: /removekey KEY")
+        bot.reply_to(msg, "⚠️ Usage: /removekey KEY")
         return
     
     key = args[1]
