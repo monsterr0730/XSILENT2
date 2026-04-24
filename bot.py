@@ -156,12 +156,23 @@ def format_duration(value, unit):
         return f"{value} Hour(s)"
     return f"{value} Day(s)"
 
-def get_main_active_count():
+def get_total_active_count():
     now = time.time()
+    # Clean main bot attacks
     for attack_id, info in list(active_attacks.items()):
         if now >= info["finish_time"]:
             del active_attacks[attack_id]
-    return len(active_attacks)
+    
+    # Clean hosted bot attacks
+    for token, bot_info in hosted_bots.items():
+        for attack_id, info in list(bot_info.get("active_attacks", {}).items()):
+            if now >= info["finish_time"]:
+                del bot_info["active_attacks"][attack_id]
+                save_hosted_bots(hosted_bots)
+    
+    main_count = len(active_attacks)
+    hosted_count = sum(len(b.get("active_attacks", {})) for b in hosted_bots.values())
+    return main_count + hosted_count
 
 def check_active_attack_by_target(ip, port):
     target_key = f"{ip}:{port}"
@@ -847,8 +858,8 @@ def attack(msg):
         return
     
     # Check main bot concurrent limit
-    main_active = get_main_active_count()
-    if main_active >= MAX_CONCURRENT:
+    total_active = get_total_active_count()
+    if total_active >= MAX_CONCURRENT:
         bot.reply_to(msg, f"❌ CONCURRENT LIMIT REACHED!\n📊 Active attacks: {main_active}/{MAX_CONCURRENT}\n💡 Use /status to check when a slot frees up")
         return
     
