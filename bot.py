@@ -250,7 +250,7 @@ def send_attack_to_api(ip, port, duration, chat_id, bot_instance, is_hosted=Fals
             "time": duration, 
             "concurrent": 1
         }
-response = requests.get(API_URL, params=api_params, timeout=15)
+        response = requests.get(API_URL, params=api_params, timeout=15)
 
         if response.status_code == 200:
             time.sleep(duration)
