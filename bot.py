@@ -486,12 +486,12 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             
             threading.Thread(target=run).start()
         
-        @hosted_bot.message_handler(commands=['status'])
-        def hosted_status(msg):
-            if is_bot_blocked():
-                blocked_reply(msg.chat.id)
-                return
-                         now = time.time()
+        @hosted_bot.message_handler(commands=['status'])     # 8 spaces
+        def hosted_status(msg):                             # 8 spaces
+            if is_bot_blocked():                            # 12 spaces
+                blocked_reply(msg.chat.id)                  # 16 spaces
+                return                                      # 16 spaces
+            now = time.time()                               # 12 spaces
             active_list = []
             
             if bot_token in hosted_bots and "active_attacks" in hosted_bots[bot_token]:
