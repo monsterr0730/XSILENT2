@@ -353,7 +353,8 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             if is_bot_blocked():
                 blocked_reply(msg.chat.id)
                 return
-                @hosted_bot.message_handler(commands=['start'])
+        
+        @hosted_bot.message_handler(commands=['start'])
         def hosted_start(msg):
             if is_bot_blocked():
                 blocked_reply(msg.chat.id)
@@ -407,6 +408,16 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 blocked_reply(msg.chat.id)
                 return
             uid = str(msg.chat.id)
+            
+            # KEY CHECK - User must have valid key
+            if uid not in users:
+                hosted_bot.reply_to(msg, "❌ **ACCESS DENIED!**\n\nYou don't have an active key.\nUse `/redeem KEY` to activate your access.\n\n🛒 Buy: XSILENT")
+                return
+            
+            if not check_user_expiry(uid):
+                hosted_bot.reply_to(msg, "❌ **ACCESS EXPIRED!**\n\nYour key has expired.\nUse `/redeem KEY` to get new access.\n\n🛒 Buy: XSILENT")
+                return
+            
             args = msg.text.split()
             if len(args) != 4:
                 hosted_bot.reply_to(msg, "⚠️ Usage: /attack IP PORT TIME\n📌 Example: /attack 1.1.1.1 443 60")
@@ -480,7 +491,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             if is_bot_blocked():
                 blocked_reply(msg.chat.id)
                 return
-            now = time.time()
+                         now = time.time()
             active_list = []
             
             if bot_token in hosted_bots and "active_attacks" in hosted_bots[bot_token]:
@@ -671,8 +682,8 @@ def start(msg):
         else:
             bot.reply_to(msg, f"❌ Group not approved!\n\n🛒 Contact: XSILENT")
         return
-
-        if uid in ADMIN_ID:
+    
+    if uid in ADMIN_ID:
         bot.reply_to(msg, f"""👑 XSILENT DDOS BOT - OWNER 👑
 
 ✅ Full Access
@@ -713,24 +724,7 @@ def start(msg):
 
 🛒 Buy: XSILENT""")
     
-    elif uid in resellers:
-        bot.reply_to(msg, f"""💎 XSILENT DDOS BOT - RESELLER 💎
-
-✅ Reseller Access
-⚡ Total Concurrent: {MAX_CONCURRENT}
-⏳ Cooldown: {COOLDOWN_TIME}s
-
-📝 COMMANDS:
-
-/attack IP PORT TIME
-/status
-/cooldown
-/genkey 1
-/genkey 5h
-/mykeys
-
-🛒 Buy: XSILENT""")
-    
+        
     elif uid in users:
         has_active = check_user_expiry(uid)
         bot.reply_to(msg, f"""🔥 XSILENT DDOS BOT - USER 🔥
@@ -868,7 +862,7 @@ def attack(msg):
     
     if uid in cooldown and not is_group:
         remaining = COOLDOWN_TIME - (time.time() - cooldown[uid])
-        if remaining > 0:
+                if remaining > 0:
             bot.reply_to(msg, f"⏳ Wait {int(remaining)} seconds!\n💡 Use /cooldown to check")
             return
     
@@ -1135,6 +1129,7 @@ def remove_key(msg):
     del keys_data[key]
     save_keys(keys_data)
     bot.reply_to(msg, f"✅ KEY REMOVED!\n🔑 Key: {key}")
+
 @bot.message_handler(commands=['add'])
 def add_user(msg):
     uid = str(msg.chat.id)
@@ -1479,6 +1474,7 @@ def stats(msg):
         bot.reply_to(msg, "❌ Unauthorized!")
         return
     
+           
     has_active = check_user_expiry(uid)
     status_text = "Active" if has_active else "Expired"
     cooldown_text = "Yes" if uid in cooldown else "No"
@@ -1626,4 +1622,3 @@ print(f"📊 Hosted Bots: {len(hosted_bots)}")
 print("=" * 50)
 
 bot.infinity_polling()
-                
