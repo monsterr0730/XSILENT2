@@ -500,7 +500,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             try:
                 port = int(port)
                 duration = int(duration)
-            if duration < 10 or duration > 300:
+                if duration < 10 or duration > 300:
                    hosted_bot.reply_to(msg, "❌ Duration must be 10-300 seconds!")
                    return
             except:
