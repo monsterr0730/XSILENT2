@@ -30,7 +30,7 @@ MAX_CONCURRENT = 2
 COOLDOWN_TIME = 30
 
 # ========== MONGODB CONNECTION ==========
-MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
+MONGO_URI = "mongodb+srv://MONSTER:XFUr4YZChyAVkeqR@monster.pntdmjc.mongodb.net/?appName=MONSTER"
 client = MongoClient(MONGO_URI)
 db = client["xsilent_bot"]
 users_collection = db["users"]
