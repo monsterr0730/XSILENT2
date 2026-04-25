@@ -481,7 +481,7 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             hosted_bot.reply_to(msg, f"✅ KEY REMOVED!\n🔑 Key: {key}")
         
         @hosted_bot.message_handler(commands=['attack'])
-def hosted_attack(msg):
+        def hosted_attack(msg):
     uid = str(msg.chat.id)
     if uid not in users:
         hosted_bot.reply_to(msg, "❌ ACCESS DENIED!\n\nYou don't have an active key.\nUse /redeem KEY to activate your access.")
