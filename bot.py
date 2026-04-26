@@ -31,7 +31,7 @@ COOLDOWN_TIME = 30
 GLOBAL_MAX_ATTACK_TIME = 300   # MAX 300 seconds - Koi attack isse upar nahi ho sakta
 
 # ========== MONGODB ==========
-MONGO_URI = "mongodb+srv://mohitrao83076_db_user:aZVxaq4492K81EkC@monster.ydmmckl.mongodb.net/?appName=MONSTER"
+MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
 client = MongoClient(MONGO_URI)
 db = client["xsilent_bot"]
 users_collection = db["users"]
