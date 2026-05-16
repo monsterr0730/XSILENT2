@@ -6,8 +6,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from pymongo import MongoClient
 
-# ============= CONFIGURATION =============
-BOT_TOKEN = "8466296023:AAF98OCsdXnaN2x6CMEQN3L4TBxpvkUI2pM"
+# ============= CONFIGURATION (UPDATED TOKEN) =============
+BOT_TOKEN = "8466296023:AAGgTRre3Y_NL7kvNAvDsdomJo6-p_1Vu80"  # <-- NAYA TOKEN
 OWNER_ID = 7192516189
 ADMIN_IDS = [7192516189]
 
@@ -22,16 +22,20 @@ PANEL_PASSWORD = "roxym830"
 # ============= DATABASE CLASS =============
 class Database:
     def __init__(self):
-        self.client = MongoClient(MONGODB_URI)
-        self.db = self.client["monster_bot"]
-        self.users = self.db.users
-        self.keys = self.db.keys
-        self.requests = self.db.requests
-        self.broadcasts = self.db.broadcasts
-        self.referrals = self.db.referrals
-        
-        self.users.create_index("user_id", unique=True)
-        self.keys.create_index("key_code", unique=True)
+        try:
+            self.client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+            self.db = self.client["monster_bot"]
+            self.users = self.db.users
+            self.keys = self.db.keys
+            self.requests = self.db.requests
+            self.broadcasts = self.db.broadcasts
+            self.referrals = self.db.referrals
+            
+            self.users.create_index("user_id", unique=True)
+            self.keys.create_index("key_code", unique=True)
+            print("✅ MongoDB Connected!")
+        except Exception as e:
+            print(f"❌ MongoDB Error: {e}")
     
     def add_user(self, user_id, username, first_name, referred_by=None):
         try:
@@ -49,27 +53,40 @@ class Database:
                 })
                 return True
             return False
-        except:
+        except Exception as e:
+            print(f"Add user error: {e}")
             return False
     
     def get_user(self, user_id):
-        return self.users.find_one({"user_id": user_id})
+        try:
+            return self.users.find_one({"user_id": user_id})
+        except:
+            return None
     
     def approve_user(self, user_id):
-        self.users.update_one({"user_id": user_id}, {"$set": {"is_approved": True}})
+        try:
+            self.users.update_one({"user_id": user_id}, {"$set": {"is_approved": True}})
+        except:
+            pass
     
     def is_approved(self, user_id):
         user = self.get_user(user_id)
-        return user["is_approved"] if user else False
+        return user["is_approved"] if user else (user_id == OWNER_ID)
     
     def is_admin(self, user_id):
         return user_id == OWNER_ID or user_id in ADMIN_IDS
     
     def get_all_users(self):
-        return list(self.users.find({}, {"user_id": 1, "username": 1, "first_name": 1, "is_approved": 1}))
+        try:
+            return list(self.users.find({}, {"user_id": 1, "username": 1, "first_name": 1, "is_approved": 1}))
+        except:
+            return []
     
     def get_approved_users(self):
-        return [user["user_id"] for user in self.users.find({"is_approved": True}, {"user_id": 1})]
+        try:
+            return [user["user_id"] for user in self.users.find({"is_approved": True}, {"user_id": 1})]
+        except:
+            return []
     
     def save_key(self, key_code, duration, generated_by, generated_for):
         try:
@@ -87,55 +104,76 @@ class Database:
             return False
     
     def get_user_keys(self, user_id, limit=10):
-        return list(self.keys.find({"generated_for": user_id}).sort("generated_date", -1).limit(limit))
+        try:
+            return list(self.keys.find({"generated_for": user_id}).sort("generated_date", -1).limit(limit))
+        except:
+            return []
     
     def add_request(self, user_id, duration):
-        result = self.requests.insert_one({
-            "user_id": user_id,
-            "duration": duration,
-            "request_date": datetime.now().isoformat(),
-            "status": "pending"
-        })
-        return result.inserted_id
+        try:
+            result = self.requests.insert_one({
+                "user_id": user_id,
+                "duration": duration,
+                "request_date": datetime.now().isoformat(),
+                "status": "pending"
+            })
+            return result.inserted_id
+        except:
+            return None
     
     def get_pending_requests(self):
-        return list(self.requests.aggregate([
-            {"$match": {"status": "pending"}},
-            {"$lookup": {"from": "users", "localField": "user_id", "foreignField": "user_id", "as": "user"}},
-            {"$unwind": "$user"},
-            {"$sort": {"request_date": -1}}
-        ]))
+        try:
+            return list(self.requests.aggregate([
+                {"$match": {"status": "pending"}},
+                {"$lookup": {"from": "users", "localField": "user_id", "foreignField": "user_id", "as": "user"}},
+                {"$unwind": "$user"},
+                {"$sort": {"request_date": -1}}
+            ]))
+        except:
+            return []
     
     def save_broadcast(self, message, sent_by, total_received):
-        self.broadcasts.insert_one({
-            "message": message,
-            "sent_by": sent_by,
-            "sent_date": datetime.now().isoformat(),
-            "total_received": total_received
-        })
+        try:
+            self.broadcasts.insert_one({
+                "message": message,
+                "sent_by": sent_by,
+                "sent_date": datetime.now().isoformat(),
+                "total_received": total_received
+            })
+        except:
+            pass
     
     def add_referral(self, referrer_id, referred_id):
-        if self.referrals.find_one({"referred_id": referred_id}):
+        try:
+            if self.referrals.find_one({"referred_id": referred_id}):
+                return False
+            self.referrals.insert_one({
+                "referrer_id": referrer_id,
+                "referred_id": referred_id,
+                "date": datetime.now().isoformat()
+            })
+            self.users.update_one({"user_id": referrer_id}, {"$inc": {"balance": 5}})
+            return True
+        except:
             return False
-        self.referrals.insert_one({
-            "referrer_id": referrer_id,
-            "referred_id": referred_id,
-            "date": datetime.now().isoformat()
-        })
-        self.users.update_one({"user_id": referrer_id}, {"$inc": {"balance": 5}})
-        return True
     
     def get_referral_count(self, user_id):
-        return self.referrals.count_documents({"referrer_id": user_id})
+        try:
+            return self.referrals.count_documents({"referrer_id": user_id})
+        except:
+            return 0
     
     def get_stats(self):
-        return {
-            "total_users": self.users.count_documents({}),
-            "approved_users": self.users.count_documents({"is_approved": True}),
-            "total_keys": self.keys.count_documents({}),
-            "active_keys": self.keys.count_documents({"status": "active"}),
-            "pending_requests": self.requests.count_documents({"status": "pending"})
-        }
+        try:
+            return {
+                "total_users": self.users.count_documents({}),
+                "approved_users": self.users.count_documents({"is_approved": True}),
+                "total_keys": self.keys.count_documents({}),
+                "active_keys": self.keys.count_documents({"status": "active"}),
+                "pending_requests": self.requests.count_documents({"status": "pending"})
+            }
+        except:
+            return {"total_users": 0, "approved_users": 0, "total_keys": 0, "active_keys": 0, "pending_requests": 0}
 
 # ============= PANEL CLASS =============
 class PanelAPI:
@@ -153,7 +191,8 @@ class PanelAPI:
     
     def login(self):
         try:
-            login_page = self.scraper.get(f'{PANEL_URL}/login')
+            print("🔄 Logging to panel...")
+            login_page = self.scraper.get(f'{PANEL_URL}/login', timeout=30)
             csrf_match = re.search(r'name="_token"\s+value="([^"]+)"', login_page.text)
             csrf_token = csrf_match.group(1) if csrf_match else ''
             
@@ -161,13 +200,15 @@ class PanelAPI:
                 'username': PANEL_USERNAME,
                 'password': PANEL_PASSWORD,
                 '_token': csrf_token
-            })
+            }, timeout=30)
             
             if response.status_code == 200:
                 self.logged_in = True
+                print("✅ Panel login successful!")
                 return True
             return False
-        except:
+        except Exception as e:
+            print(f"❌ Panel login error: {e}")
             return False
     
     def generate_key(self, duration):
@@ -176,30 +217,43 @@ class PanelAPI:
                 if not self.login():
                     return None
             
+            print(f"🔄 Generating {duration} key...")
+            
             duration_map = {'5h':'5_hours','3d':'3_days','7d':'7_days','14d':'14_days','30d':'30_days','60d':'60_days'}
             duration_value = duration_map.get(duration, duration)
             
             response = self.scraper.post(f'{PANEL_URL}/generate', data={
                 'duration': duration_value,
                 'max_devices': '1'
-            })
+            }, timeout=30)
             
             patterns = [
                 r'[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}',
                 r'[A-Z0-9]{16,32}',
                 r'"key":"([^"]+)"',
-                r'<code>([^<]+)</code>'
+                r'"license":"([^"]+)"',
+                r'<code>([^<]+)</code>',
+                r'Key:\s*([A-Z0-9\-]+)'
             ]
             
             for pattern in patterns:
                 match = re.search(pattern, response.text, re.IGNORECASE)
                 if match:
-                    return match.group(1) if match.groups() else match.group(0)
+                    key = match.group(1) if match.groups() else match.group(0)
+                    print(f"✅ Key generated: {key}")
+                    return key
+            
+            print("❌ No key found in response")
             return None
-        except:
+        except Exception as e:
+            print(f"❌ Generation error: {e}")
             return None
 
 # ============= INITIALIZE =============
+print("=" * 50)
+print("🤖 STARTING MONSTER BOT...")
+print("=" * 50)
+
 db = Database()
 panel = PanelAPI()
 
@@ -263,10 +317,11 @@ async def request_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def generate_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     user_id = query.from_user.id
     
     if not db.is_approved(user_id) and not db.is_admin(user_id):
-        await query.answer("Not approved! Use /request", show_alert=True)
+        await query.message.edit_text("❌ Not approved! Use /request")
         return
     
     keyboard = [
@@ -292,27 +347,36 @@ async def generate_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration = query.data.replace("gen_", "")
     user_id = query.from_user.id
     
-    names = {'5h':'5H','3d':'3D','7d':'7D','14d':'14D','30d':'30D','60d':'60D'}
+    names = {'5h':'5 Hours', '3d':'3 Days', '7d':'7 Days', '14d':'14 Days', '30d':'30 Days', '60d':'60 Days'}
     
-    await query.message.edit_text(f"🔄 Generating {names[duration]} key...\n⏳ Please wait...")
+    await query.message.edit_text(f"🔄 Generating {names[duration]} key...\n⏳ Please wait 10-15 seconds...")
     
     key = panel.generate_key(duration)
     
     if key:
         db.save_key(key, names[duration], user_id, user_id)
         await query.message.edit_text(
-            f"✅ *KEY GENERATED!*\n\n🔑 `{key}`\n\nValid for {names[duration]}",
+            f"✅ *KEY GENERATED!*\n\n"
+            f"🎫 *Duration:* {names[duration]}\n"
+            f"🔑 `{key}`\n\n"
+            f"⚠️ Valid for {names[duration]} only!",
             parse_mode='Markdown'
         )
     else:
-        await query.message.edit_text("❌ Failed! Try again.")
+        await query.message.edit_text(
+            f"❌ *Generation Failed!*\n\n"
+            f"Could not generate {names[duration]} key.\n"
+            f"Please try again later.",
+            parse_mode='Markdown'
+        )
 
 async def my_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     keys = db.get_user_keys(query.from_user.id)
     
     if not keys:
-        await query.message.edit_text("📭 No keys found.")
+        await query.message.edit_text("📭 No keys found. Generate one first!")
         return
     
     msg = "🔑 *Your Keys:*\n\n"
@@ -324,20 +388,26 @@ async def my_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def referral_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     user_id = query.from_user.id
     bot = await context.bot.get_me()
     link = f"https://t.me/{bot.username}?start={user_id}"
     count = db.get_referral_count(user_id)
     
     await query.message.edit_text(
-        f"👥 *Referral Program*\n\n🔗 `{link}`\n📊 Referrals: {count}\n\nShare and earn!",
+        f"👥 *Referral Program*\n\n"
+        f"🔗 `{link}`\n"
+        f"📊 Referrals: {count}\n\n"
+        f"Share this link with friends!",
         parse_mode='Markdown'
     )
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+    
     if not db.is_admin(query.from_user.id):
-        await query.answer("Access Denied!")
+        await query.message.edit_text("❌ Access Denied!")
         return
     
     keyboard = [
@@ -352,6 +422,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     users = db.get_all_users()
     
     msg = "👥 *Users:*\n\n"
@@ -363,6 +434,7 @@ async def admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     pending = db.get_pending_requests()
     
     if not pending:
@@ -381,18 +453,26 @@ async def admin_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.message.edit_text("Send your broadcast message:")
+    await query.answer()
+    await query.message.edit_text("📢 Send your broadcast message:")
     context.user_data['broadcast_mode'] = True
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     stats = db.get_stats()
     
-    msg = f"📊 *Stats:*\n\n👥 Users: {stats['total_users']}\n✅ Approved: {stats['approved_users']}\n🔑 Keys: {stats['total_keys']}\n⏳ Pending: {stats['pending_requests']}"
+    msg = f"📊 *Statistics:*\n\n"
+    msg += f"👥 Total Users: {stats['total_users']}\n"
+    msg += f"✅ Approved: {stats['approved_users']}\n"
+    msg += f"🔑 Total Keys: {stats['total_keys']}\n"
+    msg += f"📋 Pending: {stats['pending_requests']}"
+    
     await query.message.edit_text(msg, parse_mode='Markdown')
 
 async def handle_approval(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     user_id = int(query.data.split("_")[1])
     
     db.approve_user(user_id)
@@ -426,26 +506,28 @@ async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['broadcast_mode'] = False
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query if update.callback_query else None
-    text = "📚 *Commands:*\n/start - Menu\n/request - Get access\n/help - This help"
+    text = "📚 *Commands:*\n/start - Main menu\n/request - Get access\n/help - This help"
     
-    if query:
-        await query.message.edit_text(text, parse_mode='Markdown')
+    if update.callback_query:
+        await update.callback_query.message.edit_text(text, parse_mode='Markdown')
     else:
         await update.message.reply_text(text, parse_mode='Markdown')
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
     await start(query, context)
 
 # ============= MAIN =============
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("request", request_access))
     app.add_handler(CommandHandler("help", help_command))
     
+    # Callbacks
     app.add_handler(CallbackQueryHandler(generate_menu, pattern="^generate$"))
     app.add_handler(CallbackQueryHandler(my_keys, pattern="^mykeys$"))
     app.add_handler(CallbackQueryHandler(referral_system, pattern="^referral$"))
@@ -459,14 +541,15 @@ def main():
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back$"))
     app.add_handler(CallbackQueryHandler(help_command, pattern="^help$"))
     
+    # Broadcast handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_broadcast))
     
     print("=" * 50)
-    print("🤖 MONSTER BOT RUNNING")
+    print("🤖 MONSTER BOT IS RUNNING!")
+    print(f"✅ Bot Token: {BOT_TOKEN[:10]}...")
+    print(f"✅ Owner ID: {OWNER_ID}")
     print("=" * 50)
-    print("✅ Bot Token: Set")
-    print("✅ MongoDB: Connected")
-    print("✅ Panel: Ready")
+    print("👉 Bot: https://t.me/{(app.bot.get_me())}")
     print("=" * 50)
     
     app.run_polling()
