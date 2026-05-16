@@ -89,7 +89,7 @@ async def no_key_available(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         "❌ **No keys available in this loader!**\n\n"
-        "Please contact @OwnerUsername to add keys.\n\n"
+        "Please contact admin to add keys.\n\n"
         "Try another loader:",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Loaders", callback_data="get_key")]])
     )
@@ -103,6 +103,9 @@ async def select_loader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loader_name = LOADERS[loader_idx]
     context.user_data['selected_loader'] = loader_name
     
+    # Debug: Print to console
+    print(f"Selected loader: {loader_name}")
+    
     # Get available durations for this loader
     durations = keys_col.distinct("duration", {
         "loader": loader_name,
@@ -110,9 +113,11 @@ async def select_loader(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "expiry": {"$gt": datetime.now()}
     })
     
+    print(f"Found durations: {durations}")
+    
     if not durations:
         await query.edit_message_text(
-            f"❌ **No keys available for {loader_name}**\n\nContact @OwnerUsername",
+            f"❌ **No keys available for {loader_name}**\n\nContact admin",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]])
         )
         return
@@ -148,6 +153,8 @@ async def get_key_from_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration = query.data.split('_')[1]
     loader = context.user_data['selected_loader']
     
+    print(f"Looking for key - Loader: {loader}, Duration: {duration}")
+    
     # Find available key
     available_key = keys_col.find_one({
         "loader": loader,
@@ -156,12 +163,14 @@ async def get_key_from_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "expiry": {"$gt": datetime.now()}
     })
     
+    print(f"Found key: {available_key}")
+    
     if not available_key:
         await query.edit_message_text(
             f"❌ **No Key Available!**\n\n"
             f"Loader: {loader}\n"
             f"Duration: {duration}\n\n"
-            f"📢 Keys might be out of stock. Contact @OwnerUsername",
+            f"📢 Keys might be out of stock. Contact admin.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Try Again", callback_data="get_key")]])
         )
@@ -418,7 +427,14 @@ def main():
     # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot Started! Showing available keys count...")
+    print("🤖 Bot Started! Debug mode ON...")
+    print(f"Total keys in DB: {keys_col.count_documents({})}")
+    
+    # Show all keys for debugging
+    all_keys = list(keys_col.find({}))
+    for k in all_keys:
+        print(f"Key: {k['key']}, Loader: {k['loader']}, Duration: {k['duration']}, Used: {k['used']}, Expiry: {k['expiry']}")
+    
     app.run_polling()
 
 if __name__ == "__main__":
