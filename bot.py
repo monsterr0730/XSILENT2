@@ -48,12 +48,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if users_col.find_one({"_id": user_id})["role"] == "admin":
         keyboard.append([InlineKeyboardButton("➕ Add Key", callback_data="add_key_admin")])
         keyboard.append([InlineKeyboardButton("📊 Check Keys", callback_data="check_keys")])
+        keyboard.append([InlineKeyboardButton("🛠 Fix Database", callback_data="fix_db")])
     
     await update.message.reply_text(
         "🤖 **Loader Key Bot**\n\n"
         "Click 'Get Key' to get your key",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ---------- Fix Database (Admin) ----------
+async def fix_database(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    user = users_col.find_one({"_id": user_id})
+    
+    if not user or user["role"] != "admin":
+        await query.edit_message_text("❌ Only admin can fix database!")
+        return
+    
+    # Fix all old keys - add missing fields
+    all_keys = list(keys_col.find({}))
+    fixed_count = 0
+    
+    for key_data in all_keys:
+        updates = {}
+        
+        if 'duration' not in key_data:
+            updates['duration'] = '30d'
+            fixed_count += 1
+        
+        if 'used' not in key_data:
+            updates['used'] = False
+            fixed_count += 1
+        
+        if updates:
+            keys_col.update_one({"_id": key_data["_id"]}, {"$set": updates})
+    
+    await query.edit_message_text(
+        f"✅ **Database Fixed!**\n\n"
+        f"Fixed {fixed_count} keys\n\n"
+        f"Now you can use the bot normally.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="back_start")]])
     )
 
 # ---------- GET KEY - Show Loaders with Available Count ----------
@@ -103,17 +142,20 @@ async def select_loader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loader_name = LOADERS[loader_idx]
     context.user_data['selected_loader'] = loader_name
     
-    # Debug: Print to console
-    print(f"Selected loader: {loader_name}")
-    
-    # Get available durations for this loader
-    durations = keys_col.distinct("duration", {
+    # Get available durations for this loader (handle missing duration field)
+    all_keys = list(keys_col.find({
         "loader": loader_name,
         "used": False,
         "expiry": {"$gt": datetime.now()}
-    })
+    }))
     
-    print(f"Found durations: {durations}")
+    # Extract durations, handle missing field
+    durations = set()
+    for key_data in all_keys:
+        dur = key_data.get('duration', '30d')  # Default to 30d if missing
+        durations.add(dur)
+    
+    durations = list(durations)
     
     if not durations:
         await query.edit_message_text(
@@ -153,17 +195,13 @@ async def get_key_from_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration = query.data.split('_')[1]
     loader = context.user_data['selected_loader']
     
-    print(f"Looking for key - Loader: {loader}, Duration: {duration}")
-    
-    # Find available key
+    # Find available key (handle missing fields)
     available_key = keys_col.find_one({
         "loader": loader,
         "duration": duration,
         "used": False,
         "expiry": {"$gt": datetime.now()}
     })
-    
-    print(f"Found key: {available_key}")
     
     if not available_key:
         await query.edit_message_text(
@@ -347,16 +385,15 @@ async def view_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = f"📁 **{loader_name}**\n\n"
     available_count = 0
     for key_data in all_keys[:20]:
-        if not key_data['used'] and key_data['expiry'] > datetime.now():
+        duration = key_data.get('duration', '30d')
+        if not key_data.get('used', False) and key_data['expiry'] > datetime.now():
             status = "✅ Available"
             available_count += 1
-        elif key_data['used']:
+        elif key_data.get('used', False):
             status = "❌ Used"
         else:
             status = "⏰ Expired"
-        message += f"🔑 `{key_data['key']}`\n   ⏳ {key_data['duration']} | {status}\n\n"
-    
-    message = f"📁 **{loader_name}** (✅ Available: {available_count})\n\n" + message.split('\n\n', 1)[1] if available_count > 0 else message
+        message += f"🔑 `{key_data['key']}`\n   ⏳ {duration} | {status}\n\n"
     
     if len(all_keys) > 20:
         message += f"\n*Showing last 20 of {len(all_keys)} keys*"
@@ -384,7 +421,7 @@ async def reset_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ADMIN_ID,
         f"⚠️ **Reset Request**\n"
         f"Key: `{key}`\n"
-        f"Loader: {key_data['loader']}\n"
+        f"Loader: {key_data.get('loader', 'Unknown')}\n"
         f"Requested by: {update.effective_user.id}",
         parse_mode="Markdown"
     )
@@ -423,17 +460,13 @@ def main():
     app.add_handler(CallbackQueryHandler(check_keys, pattern="^check_keys$"))
     app.add_handler(CallbackQueryHandler(view_keys, pattern="^view_keys_"))
     app.add_handler(CallbackQueryHandler(back_start, pattern="^back_start$"))
+    app.add_handler(CallbackQueryHandler(fix_database, pattern="^fix_db$"))
     
     # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot Started! Debug mode ON...")
+    print("🤖 Bot Started! Error fixed...")
     print(f"Total keys in DB: {keys_col.count_documents({})}")
-    
-    # Show all keys for debugging
-    all_keys = list(keys_col.find({}))
-    for k in all_keys:
-        print(f"Key: {k['key']}, Loader: {k['loader']}, Duration: {k['duration']}, Used: {k['used']}, Expiry: {k['expiry']}")
     
     app.run_polling()
 
