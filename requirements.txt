@@ -5,4 +5,9 @@ requests==2.31.0
 asyncio==3.4.3
 pyTelegramBotAPI
 pymongo
-cloudscraper beautifulsoup4 requests
+python-telegram-bot
+cloudscraper
+beautifulsoup4
+requests
+aiohttp
+lxml
