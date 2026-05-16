@@ -10,10 +10,10 @@ from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 # ---------- CONFIG ----------
 BOT_TOKEN = "8466296023:AAHHz4iBpDWwZJgZABOapwlFRHn8f51uC6w"
-ADMIN_ID = 7192516189  # Apna Telegram ID daalo
+ADMIN_ID = 7192516189
 MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
 
-# ---------- CHECK MONGODB CONNECTION FIRST ----------
+# ---------- CHECK MONGODB CONNECTION ----------
 print("🔌 Checking MongoDB connection...")
 try:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
@@ -21,25 +21,12 @@ try:
     print("✅ MongoDB connected successfully!")
 except (ConnectionFailure, ServerSelectionTimeoutError) as e:
     print(f"❌ MongoDB connection failed: {e}")
-    print("\n💡 Solutions:")
-    print("1. Make sure MongoDB is installed: https://www.mongodb.com/try/download/community")
-    print("2. Start MongoDB service:")
-    print("   - Windows: net start MongoDB")
-    print("   - Linux: sudo systemctl start mongod")
-    print("   - Mac: brew services start mongodb-community")
-    print("3. Or use MongoDB Atlas (cloud):")
-    print("   - Sign up at https://www.mongodb.com/atlas")
-    print("   - Get connection string and replace MONGO_URI")
     sys.exit(1)
 
 # ---------- MongoDB Setup ----------
 db = client["loader_bot"]
 keys_col = db["keys"]
 users_col = db["users"]
-
-# ---------- Create Indexes ----------
-keys_col.create_index("key", unique=True)
-keys_col.create_index([("loader", 1), ("used", 1), ("expiry", 1)])
 
 # ---------- Loader List ----------
 LOADERS = [
@@ -50,7 +37,6 @@ LOADERS = [
     "PAID LOADER", "Vex loder"
 ]
 
-# ---------- Helper Functions ----------
 def parse_duration(duration_str):
     duration_str = str(duration_str).strip().lower()
     if 'h' in duration_str:
@@ -60,7 +46,7 @@ def parse_duration(duration_str):
         days = int(duration_str.replace('d', ''))
         return timedelta(days=days)
 
-# ---------- /start Command ----------
+# ---------- /start ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not users_col.find_one({"_id": user_id}):
@@ -74,13 +60,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("📊 Check Keys", callback_data="check_keys")])
     
     await update.message.reply_text(
-        "🤖 **Loader Key Bot**\n\n"
-        "Click 'Get Key' to get your key",
+        "🤖 **Loader Key Bot**\n\nClick 'Get Key' to get your key",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------- GET KEY - Show Loaders with Available Count ----------
+# ---------- GET KEY ----------
 async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -93,7 +78,7 @@ async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "used": False,
                 "expiry": {"$gt": datetime.now()}
             })
-        except Exception as e:
+        except:
             available_count = 0
         
         if available_count > 0:
@@ -107,19 +92,15 @@ async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------- No Key Handler ----------
 async def no_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     await query.edit_message_text(
-        "❌ **No keys available!**\n\n"
-        "Contact admin to add keys.\n\n"
-        "Try another loader:",
+        "❌ **No keys available!**\n\nContact admin.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]])
     )
 
-# ---------- Show Durations for Selected Loader ----------
+# ---------- SHOW DURATIONS ----------
 async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -129,7 +110,6 @@ async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['selected_loader'] = loader_name
     
     try:
-        # Get all available keys for this loader
         available_keys = list(keys_col.find({
             "loader": loader_name,
             "used": False,
@@ -138,20 +118,16 @@ async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not available_keys:
             await query.edit_message_text(
-                f"❌ **No keys available for {loader_name}**",
+                f"❌ **No keys for {loader_name}**",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]])
             )
             return
         
-        # Group by duration
         durations = {}
         for key_data in available_keys:
             dur = key_data.get('duration', '30d')
-            if dur not in durations:
-                durations[dur] = 0
-            durations[dur] += 1
+            durations[dur] = durations.get(dur, 0) + 1
         
-        # Sort durations
         duration_order = {"5h": 1, "1d": 2, "7d": 3, "14d": 4, "30d": 5, "60d": 6}
         
         keyboard = []
@@ -167,12 +143,9 @@ async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
     except Exception as e:
-        await query.edit_message_text(
-            f"❌ Error: {str(e)}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]])
-        )
+        await query.edit_message_text(f"❌ Error: {str(e)}")
 
-# ---------- Get Key from Database ----------
+# ---------- GET FINAL KEY (FIXED - NO copy_text) ----------
 async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -181,14 +154,10 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loader = context.user_data.get('selected_loader')
     
     if not loader:
-        await query.edit_message_text(
-            "❌ Session expired! Please start again.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Start Over", callback_data="get_key")]])
-        )
+        await query.edit_message_text("❌ Session expired! Start over.")
         return
     
     try:
-        # Find one available key
         available_key = keys_col.find_one({
             "loader": loader,
             "duration": duration,
@@ -197,7 +166,6 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         
         if not available_key:
-            # Try without duration filter (just in case)
             available_key = keys_col.find_one({
                 "loader": loader,
                 "used": False,
@@ -206,11 +174,7 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if not available_key:
             await query.edit_message_text(
-                f"❌ **No key available!**\n\n"
-                f"Loader: {loader}\n"
-                f"Duration: {duration}\n\n"
-                f"Contact admin to add more keys.",
-                parse_mode="Markdown",
+                f"❌ **No key available!**\n\nLoader: {loader}\nDuration: {duration}\n\nContact admin.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Try Again", callback_data="get_key")]])
             )
             return
@@ -221,47 +185,37 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             {"$set": {"used": True, "used_by": update.effective_user.id, "used_at": datetime.now()}}
         )
         
-        # Send key with copy button
         key_text = available_key['key']
+        
+        # FIXED: No copy_text parameter - using message with selectable text
         await query.edit_message_text(
             f"✅ **Here is your key!**\n\n"
             f"🔑 `{key_text}`\n"
             f"📦 Loader: {loader}\n"
             f"⏳ Duration: {duration}\n\n"
-            f"✨ **Tap below to copy** ✨",
+            f"✨ **Copy this key** ✨\n"
+            f"👉 `{key_text}` 👈\n\n"
+            f"Tap and hold to copy, or select the text.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("📋 Copy Key", copy_text=key_text)
-            ], [
                 InlineKeyboardButton("◀️ Get Another Key", callback_data="get_key")
             ]])
         )
         
     except Exception as e:
-        await query.edit_message_text(
-            f"❌ Error getting key: {str(e)}\n\nContact admin.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]])
-        )
+        await query.edit_message_text(f"❌ Error: {str(e)}\n\nContact admin.")
 
-# ---------- ADD KEY (Admin Only) ----------
+# ---------- ADD KEY (ADMIN) ----------
 async def add_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     await query.edit_message_text(
-        "➕ **Add New Key**\n\n"
-        "Send key in this format:\n"
-        "`loader | duration | key`\n\n"
-        "**Examples:**\n"
-        "`X SILENT | 30d | VEX-ABC123`\n"
-        "`DEFEND MOD | 5h | DEFEND-999`\n\n"
-        "**Durations:** 1d, 5h, 7d, 14d, 30d, 60d\n\n"
-        "Send /cancel to cancel",
+        "➕ **Add New Key**\n\nSend:\n`loader | duration | key`\n\nExamples:\n`X SILENT | 30d | VEX-ABC123`\n`DEFEND MOD | 5h | DEFEND-999`\n\nDurations: 1d, 5h, 7d, 14d, 30d, 60d\n\nSend /cancel",
         parse_mode="Markdown"
     )
     context.user_data['awaiting_key'] = True
 
-# ---------- Process Add Key ----------
 async def process_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get('awaiting_key'):
         return
@@ -270,7 +224,7 @@ async def process_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = users_col.find_one({"_id": user_id})
     
     if not user or user["role"] != "admin":
-        await update.message.reply_text("❌ Only admin can add keys.")
+        await update.message.reply_text("❌ Only admin.")
         context.user_data['awaiting_key'] = False
         return
     
@@ -282,26 +236,22 @@ async def process_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         parts = [p.strip() for p in update.message.text.split('|')]
         if len(parts) != 3:
-            raise ValueError("Invalid format")
+            raise ValueError()
         
         loader_name, duration_str, key = parts
         
-        # Check loader
         if loader_name not in LOADERS:
-            await update.message.reply_text(f"❌ Loader '{loader_name}' not found!")
+            await update.message.reply_text(f"❌ Loader not found!")
             return
         
-        # Check duplicate
         if keys_col.find_one({"key": key}):
-            await update.message.reply_text("❌ This key already exists!")
+            await update.message.reply_text("❌ Key exists!")
             context.user_data['awaiting_key'] = False
             return
         
-        # Calculate expiry
         duration = parse_duration(duration_str)
         expiry = datetime.now() + duration
         
-        # Save
         keys_col.insert_one({
             "key": key,
             "loader": loader_name,
@@ -313,29 +263,18 @@ async def process_add_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "created_at": datetime.now()
         })
         
-        await update.message.reply_text(
-            f"✅ **Key Added!**\n\n"
-            f"🔑 `{key}`\n"
-            f"📦 {loader_name}\n"
-            f"⏳ {duration_str}",
-            parse_mode="Markdown"
-        )
-        
+        await update.message.reply_text(f"✅ **Key Added!**\n🔑 `{key}`\n📦 {loader_name}\n⏳ {duration_str}", parse_mode="Markdown")
         context.user_data['awaiting_key'] = False
         
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Invalid format!\nUse: `loader | duration | key`\nExample: `X SILENT | 30d | KEY123`",
-            parse_mode="Markdown"
-        )
+    except:
+        await update.message.reply_text("❌ Invalid! Use: `loader | duration | key`", parse_mode="Markdown")
 
-# ---------- CHECK KEYS (Admin) ----------
+# ---------- CHECK KEYS ----------
 async def check_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     message = "📊 **Key Statistics**\n\n"
-    total_keys = 0
     total_available = 0
     
     for loader in LOADERS:
@@ -344,28 +283,20 @@ async def check_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "used": False, 
             "expiry": {"$gt": datetime.now()}
         })
-        used = keys_col.count_documents({"loader": loader, "used": True})
-        
-        total_keys += available + used
         total_available += available
         
         if available > 0:
-            message += f"✅ **{loader}** - {available} keys available\n"
+            message += f"✅ **{loader}** - {available} keys\n"
         else:
-            message += f"❌ **{loader}** - No keys\n"
+            message += f"❌ **{loader}** - 0 keys\n"
     
-    message += f"\n📊 **Total:** {total_available} keys available out of {total_keys}"
+    message += f"\n📊 **Total Available:** {total_available} keys"
     
     keyboard = [[InlineKeyboardButton("➕ Add Key", callback_data="add_key_admin")],
                 [InlineKeyboardButton("◀️ Back", callback_data="back_start")]]
     
-    await query.edit_message_text(
-        message,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- RESET KEY ----------
 async def reset_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) != 1:
         await update.message.reply_text("Usage: /reset <key>")
@@ -378,41 +309,27 @@ async def reset_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Key not found!")
         return
     
-    await context.bot.send_message(
-        ADMIN_ID,
-        f"⚠️ **Reset Request**\n"
-        f"Key: `{key}`\n"
-        f"Loader: {key_data.get('loader', 'Unknown')}",
-        parse_mode="Markdown"
-    )
-    
-    await update.message.reply_text(f"✅ Reset request sent to admin!")
+    await context.bot.send_message(ADMIN_ID, f"⚠️ **Reset Request**\n🔑 `{key}`\n📦 {key_data.get('loader', 'Unknown')}", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Reset request sent!")
 
-# ---------- Back to Start ----------
 async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await start(update, context)
 
-# ---------- Handle Messages ----------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('awaiting_key'):
         await process_add_key(update, context)
     else:
-        await update.message.reply_text(
-            "⚠️ Use /start to get keys\n"
-            "Use /reset KEY to request key reset"
-        )
+        await update.message.reply_text("⚠️ Use /start to get keys")
 
 # ---------- MAIN ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset_key))
     
-    # Callbacks
     app.add_handler(CallbackQueryHandler(get_key, pattern="^get_key$"))
     app.add_handler(CallbackQueryHandler(show_durations, pattern="^loader_"))
     app.add_handler(CallbackQueryHandler(no_key_handler, pattern="^noloader_"))
@@ -421,11 +338,10 @@ def main():
     app.add_handler(CallbackQueryHandler(check_keys, pattern="^check_keys$"))
     app.add_handler(CallbackQueryHandler(back_start, pattern="^back_start$"))
     
-    # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot Started Successfully!")
-    print(f"📊 Total keys in DB: {keys_col.count_documents({})}")
+    print("🤖 Bot Started!")
+    print(f"📊 Total keys: {keys_col.count_documents({})}")
     
     app.run_polling()
 
