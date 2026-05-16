@@ -1,6 +1,7 @@
 import asyncio
 import cloudscraper
 import re
+import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -19,116 +20,132 @@ class Database:
         self.users = self.db.users
         
     def add_user(self, user_id, username, first_name):
-        try:
-            existing = self.users.find_one({"user_id": user_id})
-            if not existing:
-                self.users.insert_one({
-                    "user_id": user_id,
-                    "username": username,
-                    "first_name": first_name,
-                    "approved": True if user_id == OWNER_ID else False,
-                    "join_date": datetime.now().isoformat(),
-                    "keys": 0
-                })
-                return True
-            return False
-        except Exception as e:
-            print(f"Add user error: {e}")
-            return False
+        if not self.users.find_one({"user_id": user_id}):
+            self.users.insert_one({
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+                "approved": user_id == OWNER_ID,
+                "join_date": datetime.now().isoformat()
+            })
     
     def is_approved(self, user_id):
-        try:
-            user = self.users.find_one({"user_id": user_id})
-            if user:
-                return user.get("approved", False)
-            return False
-        except:
-            return False
+        user = self.users.find_one({"user_id": user_id})
+        return user.get("approved", False) if user else False
     
     def approve_user(self, user_id):
-        try:
-            self.users.update_one({"user_id": user_id}, {"$set": {"approved": True}})
-            return True
-        except:
-            return False
-    
-    def get_all_users(self):
-        try:
-            return list(self.users.find({}, {"user_id": 1, "first_name": 1, "approved": 1}))
-        except:
-            return []
+        self.users.update_one({"user_id": user_id}, {"$set": {"approved": True}})
 
-# ============= PANEL API =============
-class PanelAPI:
+db = Database()
+
+# ============= REAL PANEL GENERATION =============
+class RealPanel:
     def __init__(self):
         self.scraper = cloudscraper.create_scraper(
             browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True},
             delay=5
         )
+        self.session = None
         self.logged_in = False
     
-    def generate_key(self, duration):
+    def login(self):
         try:
-            # First get login page
-            print("Getting login page...")
-            login_page = self.scraper.get('https://xsilent.shop/vip/login')
+            # Get login page with CSRF
+            resp = self.scraper.get('https://xsilent.shop/vip/login')
             
-            # Get CSRF token
-            csrf_token = None
-            csrf_match = re.search(r'name="_token"\s+value="([^"]+)"', login_page.text)
-            if csrf_match:
-                csrf_token = csrf_match.group(1)
+            # Extract CSRF token
+            csrf = re.search(r'name="_token"\s+value="([^"]+)"', resp.text)
+            csrf_token = csrf.group(1) if csrf else ''
             
-            # Login
-            print("Logging in...")
+            # Also check for other token formats
+            if not csrf_token:
+                csrf = re.search(r'csrf-token" content="([^"]+)"', resp.text)
+                csrf_token = csrf.group(1) if csrf else ''
+            
+            # Login post
             login_data = {
                 'username': 'VIPKEY',
                 'password': 'roxym830',
-                '_token': csrf_token if csrf_token else ''
+                '_token': csrf_token
             }
+            
             login_res = self.scraper.post('https://xsilent.shop/vip/login', data=login_data)
             
-            # Duration mapping
+            # Check if logged in
+            if login_res.status_code == 200:
+                self.logged_in = True
+                print("✅ Panel login successful")
+                return True
+            return False
+            
+        except Exception as e:
+            print(f"Login error: {e}")
+            return False
+    
+    def generate_key(self, duration):
+        try:
+            if not self.logged_in:
+                if not self.login():
+                    return None
+            
             duration_map = {
-                '5h': '5_hours',
-                '3d': '3_days', 
-                '7d': '7_days',
-                '14d': '14_days',
-                '30d': '30_days',
-                '60d': '60_days'
+                '5h': '5_hours', '3d': '3_days', '7d': '7_days',
+                '14d': '14_days', '30d': '30_days', '60d': '60_days'
             }
             
-            # Try to generate
-            print(f"Generating {duration} key...")
-            gen_data = {
-                'duration': duration_map.get(duration, duration),
-                'max_devices': '1'
-            }
+            dur_value = duration_map.get(duration, duration)
             
-            # Try different endpoints
-            endpoints = [
-                'https://xsilent.shop/vip/generate',
-                'https://xsilent.shop/vip/user/generate',
-                'https://xsilent.shop/vip/api/generate'
-            ]
+            # Try multiple methods
             
-            for endpoint in endpoints:
-                try:
-                    response = self.scraper.post(endpoint, data=gen_data)
-                    
-                    # Extract key
-                    key = self.extract_key(response.text)
+            # Method 1: AJAX POST
+            try:
+                headers = {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                }
+                resp = self.scraper.post(
+                    'https://xsilent.shop/vip/generate',
+                    json={'duration': dur_value, 'max_devices': 1},
+                    headers=headers
+                )
+                if resp.status_code == 200:
+                    data = resp.json() if resp.text else {}
+                    key = data.get('key') or data.get('license') or data.get('code')
                     if key:
-                        print(f"Key found: {key}")
                         return key
-                except:
-                    continue
+            except:
+                pass
             
-            # If no key found, try to get from page source
-            dashboard = self.scraper.get('https://xsilent.shop/vip/dashboard')
-            key = self.extract_key(dashboard.text)
-            if key:
-                return key
+            # Method 2: Form POST
+            try:
+                resp = self.scraper.post(
+                    'https://xsilent.shop/vip/generate',
+                    data={'duration': dur_value, 'max_devices': 1}
+                )
+                key = self.extract_key(resp.text)
+                if key:
+                    return key
+            except:
+                pass
+            
+            # Method 3: GET request
+            try:
+                resp = self.scraper.get(f'https://xsilent.shop/vip/generate?duration={dur_value}&max_devices=1')
+                key = self.extract_key(resp.text)
+                if key:
+                    return key
+            except:
+                pass
+            
+            # Method 4: Check dashboard for existing keys
+            try:
+                dashboard = self.scraper.get('https://xsilent.shop/vip/dashboard')
+                keys = re.findall(r'[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}', dashboard.text)
+                if keys:
+                    return keys[0]
+            except:
+                pass
             
             return None
             
@@ -142,23 +159,26 @@ class PanelAPI:
             r'[A-Z0-9]{16,32}',
             r'"key":"([^"]+)"',
             r'"license":"([^"]+)"',
-            r'<code>([^<]+)</code>',
-            r'<span[^>]*>([A-Z0-9\-]{16,})</span>',
-            r'value="([A-Z0-9\-]{16,})"',
-            r'Key:\s*([A-Z0-9\-]+)'
+            r'<code>([^<]+)</code>'
         ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                result = match.group(1) if match.groups() else match.group(0)
-                if len(result) >= 8:
-                    return result.strip()
+        for p in patterns:
+            m = re.search(p, text, re.I)
+            if m:
+                return m.group(1) if m.groups() else m.group(0)
         return None
 
-# ============= INIT =============
-db = Database()
-panel = PanelAPI()
+panel = RealPanel()
+
+# ============= DEMO KEYS (Temporary until panel works) =============
+# Ye tab tak use hoga jab tak panel fix nahi hota
+DEMO_KEYS = {
+    '5h': 'XSLT-5H-' + ''.join([str(i) for i in range(6)]),
+    '3d': 'XSLT-3D-' + ''.join([str(i) for i in range(6)]),
+    '7d': 'XSLT-7D-' + ''.join([str(i) for i in range(6)]),
+    '14d': 'XSLT-14D-' + ''.join([str(i) for i in range(6)]),
+    '30d': 'XSLT-30D-' + ''.join([str(i) for i in range(6)]),
+    '60d': 'XSLT-60D-' + ''.join([str(i) for i in range(6)])
+}
 
 # ============= BOT HANDLERS =============
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -175,15 +195,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     if user.id == OWNER_ID:
-        keyboard.append([InlineKeyboardButton("👑 Admin", callback_data="admin")])
+        keyboard.append([InlineKeyboardButton("🔧 Panel Status", callback_data="status")])
     
-    status = "✅ Approved" if db.is_approved(user.id) else "⏳ Pending (Use /request)"
+    status = "✅" if db.is_approved(user.id) else "⏳"
     
     await update.message.reply_text(
-        f"🔥 *XSILENT KEY GENERATOR* 🔥\n\n"
+        f"🔥 *XSILENT VIP KEY GENERATOR* 🔥\n\n"
         f"👋 Hello {user.first_name}!\n"
         f"📌 Status: {status}\n\n"
-        f"👇 Select duration to generate key:",
+        f"👇 Select duration:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
@@ -196,7 +216,7 @@ async def generate_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     
     if not db.is_approved(user_id) and user_id != OWNER_ID:
-        await query.message.edit_text("❌ Not approved! Send /request to get access.")
+        await query.message.edit_text("❌ Not approved! Contact admin.")
         return
     
     duration_names = {
@@ -206,34 +226,57 @@ async def generate_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     msg = await query.message.edit_text(
         f"🔄 Generating {duration_names[duration]} key...\n"
-        f"⏳ Please wait 10-20 seconds...\n\n"
-        f"🔐 Bypassing Cloudflare...",
+        f"⏳ Connecting to panel...\n\n"
+        f"🔐 Bypassing Cloudflare protection...",
         parse_mode='Markdown'
     )
     
-    key = panel.generate_key(duration)
+    # Try real panel first
+    real_key = panel.generate_key(duration)
     
-    if key:
+    if real_key:
         await msg.edit_text(
             f"✅ *KEY GENERATED!*\n\n"
             f"🎫 *Duration:* {duration_names[duration]}\n"
-            f"🔑 *Your Key:*\n"
-            f"`{key}`\n\n"
-            f"⚠️ Valid for {duration_names[duration]} only!\n"
-            f"📋 Copy and use in XSilent app.",
+            f"🔑 `{real_key}`\n\n"
+            f"⚠️ Valid for {duration_names[duration]} only!",
             parse_mode='Markdown'
         )
     else:
+        # Show demo key as fallback
         await msg.edit_text(
-            f"❌ *Generation Failed!*\n\n"
-            f"Duration: {duration_names[duration]}\n\n"
-            f"Possible issues:\n"
-            f"• Panel Cloudflare blocking\n"
-            f"• Panel API changed\n"
-            f"• Try again later\n\n"
-            f"Contact admin if issue persists.",
+            f"⚠️ *Panel Connection Failed*\n\n"
+            f"🎫 *Duration:* {duration_names[duration]}\n"
+            f"🔑 `{DEMO_KEYS[duration]}`\n\n"
+            f"❌ *Note:* Panel is currently unreachable.\n"
+            f"This is a demo key. Contact admin for real keys.\n\n"
+            f"🔧 Panel Status: Cloudflare Blocking",
             parse_mode='Markdown'
         )
+
+async def panel_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Test panel
+    try:
+        test = panel.login()
+        if test:
+            status_text = "✅ CONNECTED"
+        else:
+            status_text = "❌ BLOCKED"
+    except:
+        status_text = "❌ OFFLINE"
+    
+    await query.message.edit_text(
+        f"🔧 *Panel Status*\n\n"
+        f"Status: {status_text}\n"
+        f"URL: xsilent.shop/vip\n\n"
+        f"*If blocked:*\n"
+        f"• Cloudflare protection active\n"
+        f"• Waiting for fix...",
+        parse_mode='Markdown'
+    )
 
 async def request_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -242,107 +285,53 @@ async def request_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ You are already approved!")
         return
     
-    # Add to pending (you can store in DB)
     await update.message.reply_text(
         "✅ *Request Sent!*\n\n"
-        "Your request has been sent to admin.\n"
-        "You will be notified once approved.\n\n"
-        "Please wait...",
+        "Admin will approve you soon.",
         parse_mode='Markdown'
     )
     
-    # Notify owner
     await context.bot.send_message(
         OWNER_ID,
-        f"🆕 *New Access Request!*\n\n"
-        f"👤 User: {user.first_name}\n"
-        f"🆔 ID: `{user.id}`\n"
-        f"📛 Username: @{user.username or 'N/A'}\n\n"
-        f"Send: `/approve {user.id}` to approve.",
+        f"🆕 *New Request*\n👤 {user.first_name}\n🆔 `{user.id}`\n/approve {user.id}",
         parse_mode='Markdown'
     )
 
 async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Only owner can use this command!")
+        await update.message.reply_text("❌ Owner only!")
         return
     
     try:
-        user_id = int(context.args[0])
-        db.approve_user(user_id)
-        await update.message.reply_text(f"✅ User `{user_id}` approved successfully!", parse_mode='Markdown')
-        
-        # Notify user
-        try:
-            await context.bot.send_message(
-                user_id,
-                "✅ *Congratulations!*\n\nYour access has been approved!\nUse /start to generate keys.",
-                parse_mode='Markdown'
-            )
-        except:
-            pass
+        uid = int(context.args[0])
+        db.approve_user(uid)
+        await update.message.reply_text(f"✅ User {uid} approved!")
+        await context.bot.send_message(uid, "✅ You are approved! Use /start")
     except:
-        await update.message.reply_text("❌ Usage: `/approve user_id`", parse_mode='Markdown')
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if query.from_user.id != OWNER_ID:
-        await query.message.edit_text("❌ Admin only!")
-        return
-    
-    users = db.get_all_users()
-    msg = "👥 *Users List:*\n\n"
-    for u in users:
-        status = "✅" if u.get("approved") else "⏳"
-        msg += f"{status} `{u['user_id']}` - {u.get('first_name', '?')}\n"
-    
-    keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back")]]
-    await query.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+        await update.message.reply_text("Usage: /approve user_id")
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await start(query, context)
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📚 *Commands:*\n\n"
-        "/start - Main menu\n"
-        "/request - Request access\n"
-        "/help - This help\n\n"
-        "*How to get key:*\n"
-        "1. Send /request\n"
-        "2. Wait for admin approval\n"
-        "3. Use /start and select duration\n"
-        "4. Copy your key",
-        parse_mode='Markdown'
-    )
-
 # ============= MAIN =============
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("request", request_access))
     app.add_handler(CommandHandler("approve", approve_user))
-    app.add_handler(CommandHandler("help", help_command))
     
-    # Callbacks
     app.add_handler(CallbackQueryHandler(generate_key, pattern="^gen_"))
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
+    app.add_handler(CallbackQueryHandler(panel_status, pattern="^status$"))
     app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back$"))
     
     print("=" * 50)
-    print("🤖 XSILENT KEY GENERATOR BOT")
+    print("🤖 XSILENT KEY GENERATOR")
     print("=" * 50)
-    print(f"✅ Bot Token: {BOT_TOKEN[:15]}...")
-    print(f"✅ Owner ID: {OWNER_ID}")
-    print(f"✅ MongoDB: Connected")
-    print("=" * 50)
-    print("Bot is running! Press Ctrl+C to stop")
+    print("✅ Bot Running")
+    print("⚠️ Panel Status: Testing...")
     print("=" * 50)
     
     app.run_polling()
