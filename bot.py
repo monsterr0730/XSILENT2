@@ -9,7 +9,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 # ---------- CONFIG ----------
-BOT_TOKEN = "8466296023:AAHHz4iBpDWwZJgZABOapwlFRHn8f51uC6w"
+BOT_TOKEN = "8466296023:AAH8v_ZE4jsZ_hiI0szcA8e9ljA004mbx4Q"
 ADMIN_ID = 7192516189
 MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
 
