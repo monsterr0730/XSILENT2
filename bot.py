@@ -14,7 +14,7 @@ ADMIN_ID = "7192516189"    # @userinfobot se lo
 # XSilent Credentials
 USERNAME = "VIPKEY"
 PASSWORD = "roxym830"
-BASE_URL = "https://xsilent.shop/vip/dashboard"
+BASE_URL = "https://xsilent.shop/vip/keys"
 
 # ============= KEY GENERATION CLASS =============
 class XSilentKeyGen:
@@ -25,14 +25,13 @@ class XSilentKeyGen:
                 'platform': 'windows',
                 'desktop': True
             },
-            delay=15  # Cloudflare bypass delay
+            delay=15
         )
         self.logged_in = False
         
     def login(self):
-        """Login to panel - 100% working"""
+        """Login to panel"""
         try:
-            # Headers to look like real browser
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -43,44 +42,31 @@ class XSilentKeyGen:
                 'Referer': f'{BASE_URL}/login'
             }
             
-            # First get login page
             login_page = self.scraper.get(f'{BASE_URL}/login', headers=headers)
-            
-            # Extract CSRF token
             soup = BeautifulSoup(login_page.text, 'html.parser')
             csrf_token = None
             
-            # Find token in meta tags
             meta_token = soup.find('meta', {'name': 'csrf-token'})
             if meta_token:
                 csrf_token = meta_token.get('content')
             
-            # Find token in input fields
             if not csrf_token:
                 token_input = soup.find('input', {'name': '_token'})
                 if token_input:
                     csrf_token = token_input.get('value')
             
-            # Login data
             login_data = {
                 'username': USERNAME,
                 'password': PASSWORD,
                 '_token': csrf_token if csrf_token else ''
             }
             
-            # Post login
-            login_response = self.scraper.post(
-                f'{BASE_URL}/login',
-                data=login_data,
-                headers=headers
-            )
+            login_response = self.scraper.post(f'{BASE_URL}/login', data=login_data, headers=headers)
             
-            # Check if login successful
             if 'dashboard' in login_response.text.lower() or 'redirect' in login_response.text.lower():
                 self.logged_in = True
                 return True
                 
-            # Check for success in response
             if login_response.status_code == 200 and 'logout' in login_response.text.lower():
                 self.logged_in = True
                 return True
@@ -92,13 +78,12 @@ class XSilentKeyGen:
             return False
     
     def generate_key(self, duration):
-        """Generate key - 100% working"""
+        """Generate key"""
         if not self.logged_in:
             if not self.login():
                 return "❌ Login failed! Panel might be down."
         
         try:
-            # Map duration to panel's format
             duration_map = {
                 '5h': '5_hours',
                 '3d': '3_days', 
@@ -109,11 +94,8 @@ class XSilentKeyGen:
             }
             
             panel_duration = duration_map.get(duration, duration)
-            
-            # Generate endpoint
             generate_url = f'{BASE_URL}/generate'
             
-            # Headers
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'X-Requested-With': 'XMLHttpRequest',
@@ -121,19 +103,15 @@ class XSilentKeyGen:
                 'Referer': generate_url
             }
             
-            # Generate request data
             gen_data = {
                 'duration': panel_duration,
                 'max_devices': '1',
                 'action': 'generate_key'
             }
             
-            # Send generate request
             response = self.scraper.post(generate_url, data=gen_data, headers=headers)
             
-            # Parse response
             if response.status_code == 200:
-                # Try to parse JSON
                 try:
                     result = response.json()
                     if 'key' in result:
@@ -145,10 +123,8 @@ class XSilentKeyGen:
                 except:
                     pass
                 
-                # Extract from HTML
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # Common key patterns
                 patterns = [
                     r'<div[^>]*key[^>]*>([A-Z0-9\-]{16,})</div>',
                     r'<code>([A-Z0-9\-]{16,})</code>',
@@ -164,7 +140,6 @@ class XSilentKeyGen:
                     if match:
                         return match.group(1)
                 
-                # If key not found but response OK
                 if 'success' in response.text.lower():
                     return "✅ Key generated but extraction failed. Check panel manually."
                 else:
@@ -209,7 +184,6 @@ async def generate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '14d': '14 Days', '30d': '30 Days', '60d': '60 Days'
     }
     
-    # Send processing message
     msg = await query.edit_message_text(
         f"🔄 Generating {duration_names[duration]} key...\n"
         f"⏳ Please wait 10-15 seconds\n\n"
@@ -217,11 +191,9 @@ async def generate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
     
-    # Generate key
     key = key_gen.generate_key(duration)
     
     if key.startswith("✅") or "key" in key.lower() or len(key) > 10:
-        # Success
         response = (
             f"✅ *KEY GENERATED SUCCESSFULLY!*\n\n"
             f"🎫 *Duration:* {duration_names[duration]}\n"
@@ -232,13 +204,11 @@ async def generate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await msg.edit_text(response, parse_mode='Markdown')
         
-        # Send key separately for easy copy
         await query.message.reply_text(
             f"🔐 `{key}`",
             parse_mode='Markdown'
         )
     else:
-        # Failed
         await msg.edit_text(
             f"❌ *Generation Failed*\n\n"
             f"Duration: {duration_names[duration]}\n"
@@ -247,7 +217,7 @@ async def generate_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Panel Cloudflare blocking\n"
             f"• Session expired\n"
             f"• Key limit reached\n\n"
-            f"Try /start again or contact @admin",
+            f"Try /start again or contact admin",
             parse_mode='Markdown'
         )
 
@@ -301,7 +271,6 @@ async def back_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🔄 Checking panel status...")
     
-    # Test login
     if key_gen.login():
         await msg.edit_text(
             "✅ *Bot Status:* Online\n"
@@ -320,23 +289,24 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ============= MAIN =============
-def main():
+async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
     
-    # Callbacks
     app.add_handler(CallbackQueryHandler(generate_callback, pattern="^gen_"))
     app.add_handler(CallbackQueryHandler(help_callback, pattern="^help$"))
     app.add_handler(CallbackQueryHandler(back_callback, pattern="^back$"))
     
     print("🤖 Bot Started! 100% Working Mode")
-    print(f"👉 Bot: https://t.me/{(await app.bot.get_me()).username}")
+    
+    # Get bot info
+    bot_info = await app.bot.get_me()
+    print(f"👉 Bot: https://t.me/{bot_info.username}")
     print("Press Ctrl+C to stop")
     
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
