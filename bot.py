@@ -1,6 +1,6 @@
+
 import asyncio
-import json
-import time
+import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import cloudscraper
@@ -14,7 +14,7 @@ ADMIN_ID = "7192516189"    # @userinfobot se lo
 # XSilent Credentials
 USERNAME = "VIPKEY"
 PASSWORD = "roxym830"
-BASE_URL = "https://xsilent.shop/vip/keys"
+BASE_URL = "https://xsilent.shop/vip"
 
 # ============= KEY GENERATION CLASS =============
 class XSilentKeyGen:
@@ -30,7 +30,6 @@ class XSilentKeyGen:
         self.logged_in = False
         
     def login(self):
-        """Login to panel"""
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -78,7 +77,6 @@ class XSilentKeyGen:
             return False
     
     def generate_key(self, duration):
-        """Generate key"""
         if not self.logged_in:
             if not self.login():
                 return "❌ Login failed! Panel might be down."
@@ -150,7 +148,6 @@ class XSilentKeyGen:
         except Exception as e:
             return f"❌ Error: {str(e)}"
 
-# Initialize generator
 key_gen = XSilentKeyGen()
 
 # ============= TELEGRAM BOT HANDLERS =============
@@ -289,24 +286,26 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ============= MAIN =============
-async def main():
+def main():
+    """Start the bot"""
+    # Create application
     app = Application.builder().token(BOT_TOKEN).build()
     
+    # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
-    
     app.add_handler(CallbackQueryHandler(generate_callback, pattern="^gen_"))
     app.add_handler(CallbackQueryHandler(help_callback, pattern="^help$"))
     app.add_handler(CallbackQueryHandler(back_callback, pattern="^back$"))
     
-    print("🤖 Bot Started! 100% Working Mode")
-    
     # Get bot info
-    bot_info = await app.bot.get_me()
+    bot_info = app.bot.get_me()
+    print("🤖 Bot Started! 100% Working Mode")
     print(f"👉 Bot: https://t.me/{bot_info.username}")
     print("Press Ctrl+C to stop")
     
-    await app.run_polling()
+    # Start polling (this will block)
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
