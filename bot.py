@@ -8,7 +8,7 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 
 # ---------- CONFIG ----------
-BOT_TOKEN = "8466296023:AAH8v_ZE4jsZ_hiI0szcA8e9ljA004mbx4Q"
+BOT_TOKEN = "8466296023:AAGXB1dQ-WY87bBrYd5V2O1PnRmLPGXRO4M"
 ADMIN_ID = 7192516189
 MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
 
@@ -91,7 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_col.insert_one({"_id": user_id, "role": "user", "access": False, "blocked": False})
     
     if not has_access(user_id):
-        await update.message.reply_text(f"❌ Access Denied!\n🕐 {get_india_time().strftime('%H:%M:%S')} IST")
+        await update.message.reply_text(f"❌ *Access Denied!*\n\nContact @Flame_AI_Support\n🕐 {get_india_time().strftime('%H:%M:%S')} IST", parse_mode="Markdown")
         return
     
     keyboard = [[InlineKeyboardButton("🎮 Get Key", callback_data="get_key")]]
@@ -100,9 +100,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("➕ Add Key", callback_data="add_key_menu")])
         keyboard.append([InlineKeyboardButton("📊 Check Keys", callback_data="check_keys")])
     
-    await update.message.reply_text("🤖 Loader Key Bot", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🤖 *Loader Key Bot*\nClick 'Get Key'", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- ADD KEY MENU (Loader Select) ----------
+# ---------- ADD KEY MENU ----------
 async def add_key_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -119,7 +119,7 @@ async def add_key_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text("➕ *Select Loader to Add Keys:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- ASK FOR DURATION + KEYS ----------
+# ---------- ASK FOR KEYS ----------
 async def add_key_to_loader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -130,14 +130,13 @@ async def add_key_to_loader(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text(
         f"📁 *Loader:* {loader_name}\n\n"
-        "Send keys in this format:\n"
-        "`duration | key1,key2,key3`\n\n"
+        "Send keys:\n`duration | key1,key2,key3`\n\n"
         "*Examples:*\n"
         "`30d | ABC123,DEF456,GHI789`\n"
-        "`7d | KEY1,KEY2`\n"
-        "`5h | TEST1,TEST2`\n\n"
+        "`7d | TEST1,TEST2`\n"
+        "`5h | QUICK1`\n\n"
         "*Durations:* 5h, 1d, 7d, 14d, 30d, 60d\n\n"
-        "Send /cancel to cancel",
+        "Send /cancel",
         parse_mode="Markdown"
     )
     context.user_data['awaiting_keys'] = True
@@ -169,12 +168,7 @@ async def process_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loader_name = context.user_data.get('add_loader')
         
         if not loader_name:
-            await update.message.reply_text("❌ Session expired! Use /start")
-            context.user_data['awaiting_keys'] = False
-            return
-        
-        if loader_name not in LOADERS:
-            await update.message.reply_text(f"❌ Loader '{loader_name}' not found!")
+            await update.message.reply_text("❌ Session expired!")
             context.user_data['awaiting_keys'] = False
             return
         
@@ -190,37 +184,21 @@ async def process_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             
             keys_col.insert_one({
-                "key": key,
-                "loader": loader_name,
-                "duration": duration_str,
-                "expiry": expiry,
-                "used": False,
-                "used_by": None,
-                "created_by": update.effective_user.id,
-                "created_at": get_india_time()
+                "key": key, "loader": loader_name, "duration": duration_str,
+                "expiry": expiry, "used": False, "used_by": None,
+                "created_by": update.effective_user.id, "created_at": get_india_time()
             })
             added += 1
         
         await update.message.reply_text(
-            f"✅ *Keys Added!*\n\n"
-            f"📦 Loader: {loader_name}\n"
-            f"⏳ Duration: {duration_str}\n"
-            f"✅ Added: {added}\n"
-            f"⚠️ Skipped: {skipped}\n"
-            f"🕐 {get_india_time().strftime('%H:%M:%S')} IST",
+            f"✅ *Keys Added!*\n\n📦 {loader_name}\n⏳ {duration_str}\n✅ Added: {added}\n⚠️ Skipped: {skipped}\n🕐 {get_india_time().strftime('%H:%M:%S')} IST",
             parse_mode="Markdown"
         )
         
         context.user_data['awaiting_keys'] = False
         
-    except Exception as e:
-        await update.message.reply_text(
-            "❌ *Invalid Format!*\n\n"
-            "Use: `duration | key1,key2,key3`\n"
-            "Example: `30d | ABC123,DEF456`\n\n"
-            "Send /cancel to cancel",
-            parse_mode="Markdown"
-        )
+    except:
+        await update.message.reply_text("❌ *Invalid!*\nUse: `duration | key1,key2`\nExample: `30d | ABC123,DEF456`", parse_mode="Markdown")
 
 # ---------- GET KEY (USER) ----------
 async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,7 +222,7 @@ async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def no_loader_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("❌ No keys!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]]))
+    await query.edit_message_text("❌ No keys available!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]]))
 
 async def show_user_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -510,6 +488,14 @@ def main():
     # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot Started!")
+    print("=" * 40)
+    print("🤖 Bot Started Successfully!")
     print(f"👑 Admin ID: {ADMIN_ID}")
-   
+    print(f"🕐 India Time: {get_india_time().strftime('%Y-%m-%d %H:%M:%S')} IST")
+    print("✅ Send /start on Telegram")
+    print("=" * 40)
+    
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
