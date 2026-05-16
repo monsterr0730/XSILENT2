@@ -12,11 +12,9 @@ BOT_TOKEN = "8466296023:AAH8v_ZE4jsZ_hiI0szcA8e9ljA004mbx4Q"
 ADMIN_ID = 7192516189
 MONGO_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
 
-# ---------- INDIA TIME (GMT+5:30) ----------
+# ---------- INDIA TIME ----------
 def get_india_time():
-    utc_now = datetime.utcnow()
-    india_time = utc_now + timedelta(hours=5, minutes=30)
-    return india_time
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # ---------- CHECK MONGODB ----------
 print("🔌 Checking MongoDB...")
@@ -65,24 +63,23 @@ def is_admin(user_id):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """📚 *Bot Commands*
 
-🔹 *User Commands:*
-/start - Start the bot
-/help - Show this help
-/reset <key> - Request key reset
+🔹 *User:*
+/start - Start bot
+/help - This help
+/reset <key> - Request reset
 
 🔹 *Referral:*
 /create <name> - Create referral
-/redeem <code> - Redeem referral
+/redeem <code> - Redeem
 
 🔹 *Admin:*
 /grant <id> - Give access
 /revoke <id> - Remove access
 /blockuser <id> - Block user
-/unblockuser <id> - Unblock user
+/unblockuser <id> - Unblock
 /blockref <code> - Block referral
 
 🕐 IST: {}"""
-    
     await update.message.reply_text(help_text.format(get_india_time().strftime('%Y-%m-%d %H:%M:%S')), parse_mode="Markdown")
 
 # ---------- /start ----------
@@ -94,18 +91,138 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_col.insert_one({"_id": user_id, "role": "user", "access": False, "blocked": False})
     
     if not has_access(user_id):
-        await update.message.reply_text(f"❌ *Access Denied!*\n\nContact admin.\n🕐 {get_india_time().strftime('%H:%M:%S')} IST", parse_mode="Markdown")
+        await update.message.reply_text(f"❌ Access Denied!\n🕐 {get_india_time().strftime('%H:%M:%S')} IST")
         return
     
     keyboard = [[InlineKeyboardButton("🎮 Get Key", callback_data="get_key")]]
     
     if is_admin(user_id):
-        keyboard.append([InlineKeyboardButton("➕ Add Key", callback_data="add_key_admin")])
+        keyboard.append([InlineKeyboardButton("➕ Add Key", callback_data="add_key_menu")])
         keyboard.append([InlineKeyboardButton("📊 Check Keys", callback_data="check_keys")])
     
-    await update.message.reply_text("🤖 *Loader Key Bot*\nClick 'Get Key'", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🤖 Loader Key Bot", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- GET KEY ----------
+# ---------- ADD KEY MENU (Loader Select) ----------
+async def add_key_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(update.effective_user.id):
+        await query.edit_message_text("❌ Admin only!")
+        return
+    
+    keyboard = []
+    for i, loader in enumerate(LOADERS):
+        keyboard.append([InlineKeyboardButton(f"📁 {loader}", callback_data=f"add_loader_{i}")])
+    
+    keyboard.append([InlineKeyboardButton("◀️ Back", callback_data="back_start")])
+    
+    await query.edit_message_text("➕ *Select Loader to Add Keys:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ---------- ASK FOR DURATION + KEYS ----------
+async def add_key_to_loader(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    loader_idx = int(query.data.split('_')[2])
+    loader_name = LOADERS[loader_idx]
+    context.user_data['add_loader'] = loader_name
+    
+    await query.edit_message_text(
+        f"📁 *Loader:* {loader_name}\n\n"
+        "Send keys in this format:\n"
+        "`duration | key1,key2,key3`\n\n"
+        "*Examples:*\n"
+        "`30d | ABC123,DEF456,GHI789`\n"
+        "`7d | KEY1,KEY2`\n"
+        "`5h | TEST1,TEST2`\n\n"
+        "*Durations:* 5h, 1d, 7d, 14d, 30d, 60d\n\n"
+        "Send /cancel to cancel",
+        parse_mode="Markdown"
+    )
+    context.user_data['awaiting_keys'] = True
+
+# ---------- PROCESS KEYS ----------
+async def process_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('awaiting_keys'):
+        return
+    
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
+        context.user_data['awaiting_keys'] = False
+        return
+    
+    if update.message.text == "/cancel":
+        context.user_data['awaiting_keys'] = False
+        await update.message.reply_text("❌ Cancelled.")
+        return
+    
+    try:
+        parts = [p.strip() for p in update.message.text.split('|')]
+        if len(parts) != 2:
+            raise ValueError()
+        
+        duration_str = parts[0].strip()
+        keys_str = parts[1].strip()
+        
+        keys_list = [k.strip() for k in keys_str.split(',')]
+        loader_name = context.user_data.get('add_loader')
+        
+        if not loader_name:
+            await update.message.reply_text("❌ Session expired! Use /start")
+            context.user_data['awaiting_keys'] = False
+            return
+        
+        if loader_name not in LOADERS:
+            await update.message.reply_text(f"❌ Loader '{loader_name}' not found!")
+            context.user_data['awaiting_keys'] = False
+            return
+        
+        duration = parse_duration(duration_str)
+        expiry = datetime.utcnow() + duration
+        
+        added = 0
+        skipped = 0
+        
+        for key in keys_list:
+            if keys_col.find_one({"key": key}):
+                skipped += 1
+                continue
+            
+            keys_col.insert_one({
+                "key": key,
+                "loader": loader_name,
+                "duration": duration_str,
+                "expiry": expiry,
+                "used": False,
+                "used_by": None,
+                "created_by": update.effective_user.id,
+                "created_at": get_india_time()
+            })
+            added += 1
+        
+        await update.message.reply_text(
+            f"✅ *Keys Added!*\n\n"
+            f"📦 Loader: {loader_name}\n"
+            f"⏳ Duration: {duration_str}\n"
+            f"✅ Added: {added}\n"
+            f"⚠️ Skipped: {skipped}\n"
+            f"🕐 {get_india_time().strftime('%H:%M:%S')} IST",
+            parse_mode="Markdown"
+        )
+        
+        context.user_data['awaiting_keys'] = False
+        
+    except Exception as e:
+        await update.message.reply_text(
+            "❌ *Invalid Format!*\n\n"
+            "Use: `duration | key1,key2,key3`\n"
+            "Example: `30d | ABC123,DEF456`\n\n"
+            "Send /cancel to cancel",
+            parse_mode="Markdown"
+        )
+
+# ---------- GET KEY (USER) ----------
 async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -118,24 +235,24 @@ async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, loader in enumerate(LOADERS):
         available = keys_col.count_documents({"loader": loader, "used": False, "expiry": {"$gt": datetime.utcnow()}})
         if available > 0:
-            keyboard.append([InlineKeyboardButton(f"✅ {loader} ({available})", callback_data=f"loader_{i}")])
+            keyboard.append([InlineKeyboardButton(f"✅ {loader} ({available})", callback_data=f"get_loader_{i}")])
         else:
-            keyboard.append([InlineKeyboardButton(f"❌ {loader} (0)", callback_data=f"noloader_{i}")])
+            keyboard.append([InlineKeyboardButton(f"❌ {loader} (0)", callback_data=f"no_loader_{i}")])
     
     await query.edit_message_text("📦 *Select Loader:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def no_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def no_loader_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("❌ No keys available!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]]))
+    await query.edit_message_text("❌ No keys!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="get_key")]]))
 
-async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_user_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    loader_idx = int(query.data.split('_')[1])
+    loader_idx = int(query.data.split('_')[2])
     loader_name = LOADERS[loader_idx]
-    context.user_data['selected_loader'] = loader_name
+    context.user_data['user_loader'] = loader_name
     
     available_keys = list(keys_col.find({"loader": loader_name, "used": False, "expiry": {"$gt": datetime.utcnow()}}))
     
@@ -150,12 +267,12 @@ async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = []
     for dur in sorted(durations.keys()):
-        keyboard.append([InlineKeyboardButton(f"⏳ {dur} ({durations[dur]})", callback_data=f"dur_{dur}")])
+        keyboard.append([InlineKeyboardButton(f"⏳ {dur} ({durations[dur]})", callback_data=f"user_dur_{dur}")])
     
     keyboard.append([InlineKeyboardButton("◀️ Back", callback_data="get_key")])
     await query.edit_message_text(f"✅ *Loader:* {loader_name}\n\n⏳ *Select Duration:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def give_user_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
@@ -163,8 +280,8 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Access Denied!")
         return
     
-    duration = query.data.split('_')[1]
-    loader = context.user_data.get('selected_loader')
+    duration = query.data.split('_')[2]
+    loader = context.user_data.get('user_loader')
     
     if not loader:
         await query.edit_message_text("Session expired!")
@@ -173,7 +290,7 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     available_key = keys_col.find_one({"loader": loader, "duration": duration, "used": False, "expiry": {"$gt": datetime.utcnow()}})
     
     if not available_key:
-        await query.edit_message_text("❌ No key available!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Try Again", callback_data="get_key")]]))
+        await query.edit_message_text("❌ No key!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Try Again", callback_data="get_key")]]))
         return
     
     keys_col.update_one({"_id": available_key["_id"]}, {"$set": {"used": True, "used_by": update.effective_user.id, "used_at": get_india_time()}})
@@ -183,71 +300,6 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Get Another", callback_data="get_key")]])
     )
-
-# ---------- ADD KEY (ADMIN) ----------
-async def add_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    if not is_admin(update.effective_user.id):
-        await query.edit_message_text("❌ Admin only!")
-        return
-    
-    await query.edit_message_text(
-        "➕ *Add Keys*\n\nSend:\n`loader | duration | key1,key2`\n\nExample:\n`X SILENT | 30d | ABC123,DEF456`\n\nSend /cancel",
-        parse_mode="Markdown"
-    )
-    context.user_data['awaiting_bulk_keys'] = True
-
-async def process_add_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get('awaiting_bulk_keys'):
-        return
-    
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin only!")
-        context.user_data['awaiting_bulk_keys'] = False
-        return
-    
-    if update.message.text == "/cancel":
-        context.user_data['awaiting_bulk_keys'] = False
-        await update.message.reply_text("Cancelled.")
-        return
-    
-    try:
-        parts = [p.strip() for p in update.message.text.split('|')]
-        if len(parts) != 3:
-            raise ValueError()
-        
-        loader_name, duration_str, keys_str = parts
-        
-        if loader_name not in LOADERS:
-            await update.message.reply_text(f"❌ Loader '{loader_name}' not found!")
-            return
-        
-        keys_list = [k.strip() for k in keys_str.split(',')]
-        duration = parse_duration(duration_str)
-        expiry = datetime.utcnow() + duration
-        
-        added = 0
-        for key in keys_list:
-            if not keys_col.find_one({"key": key}):
-                keys_col.insert_one({
-                    "key": key, 
-                    "loader": loader_name, 
-                    "duration": duration_str,
-                    "expiry": expiry, 
-                    "used": False, 
-                    "used_by": None,
-                    "created_by": update.effective_user.id, 
-                    "created_at": get_india_time()
-                })
-                added += 1
-        
-        await update.message.reply_text(f"✅ Added {added} keys to {loader_name}!\n🕐 {get_india_time().strftime('%H:%M:%S')} IST")
-        context.user_data['awaiting_bulk_keys'] = False
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Invalid! Use: `loader | duration | key1,key2`\nError: {str(e)}", parse_mode="Markdown")
 
 # ---------- CHECK KEYS ----------
 async def check_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,7 +317,7 @@ async def check_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total += available
         message += f"{'✅' if available>0 else '❌'} {loader}: {available}\n"
     
-    message += f"\n📊 *Total Available:* {total} keys\n🕐 {get_india_time().strftime('%H:%M:%S')} IST"
+    message += f"\n📊 *Total:* {total} keys\n🕐 {get_india_time().strftime('%H:%M:%S')} IST"
     
     await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="back_start")]]))
 
@@ -282,7 +334,7 @@ async def grant_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = int(context.args[0])
         users_col.update_one({"_id": user_id}, {"$set": {"access": True}}, upsert=True)
-        await update.message.reply_text(f"✅ User {user_id} now has access!\n🕐 {get_india_time().strftime('%H:%M:%S')} IST")
+        await update.message.reply_text(f"✅ User {user_id} now has access!")
     except:
         await update.message.reply_text("❌ Invalid ID!")
 
@@ -298,7 +350,7 @@ async def revoke_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = int(context.args[0])
         users_col.update_one({"_id": user_id}, {"$set": {"access": False}})
-        await update.message.reply_text(f"✅ Access revoked for {user_id}!\n🕐 {get_india_time().strftime('%H:%M:%S')} IST")
+        await update.message.reply_text(f"✅ Access revoked for {user_id}!")
     except:
         await update.message.reply_text("❌ Invalid ID!")
 
@@ -348,18 +400,11 @@ async def create_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = generate_referral_code()
     
     referrals_col.insert_one({
-        "code": code, 
-        "name": name, 
-        "created_by": update.effective_user.id,
-        "created_at": get_india_time(), 
-        "redeemed_by": None, 
-        "blocked": False
+        "code": code, "name": name, "created_by": update.effective_user.id,
+        "created_at": get_india_time(), "redeemed_by": None, "blocked": False
     })
     
-    await update.message.reply_text(
-        f"✅ *Referral Created!*\n\n📛 Name: {name}\n🔗 Code: `{code}`\n\nShare: `/redeem {code}`\n🕐 {get_india_time().strftime('%H:%M:%S')} IST",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"✅ *Referral Created!*\n\n📛 Name: {name}\n🔗 Code: `{code}`\n\nShare: `/redeem {code}`", parse_mode="Markdown")
 
 async def redeem_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not has_access(update.effective_user.id):
@@ -387,20 +432,12 @@ async def redeem_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     expiry = datetime.utcnow() + timedelta(days=7)
     
     keys_col.insert_one({
-        "key": key, 
-        "loader": "REFERRAL REWARD", 
-        "duration": "7d",
-        "expiry": expiry, 
-        "used": False, 
-        "used_by": None,
-        "created_by": update.effective_user.id, 
-        "created_at": get_india_time()
+        "key": key, "loader": "REFERRAL REWARD", "duration": "7d",
+        "expiry": expiry, "used": False, "used_by": None,
+        "created_by": update.effective_user.id, "created_at": get_india_time()
     })
     
-    await update.message.reply_text(
-        f"🎉 *Referral Redeemed!*\n\n📛 Name: {ref['name']}\n🔑 Your key: `{key}`\n⏳ Valid for 7 days\n🕐 {get_india_time().strftime('%H:%M:%S')} IST",
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text(f"🎉 *Referral Redeemed!*\n\n📛 Name: {ref['name']}\n🔑 Your key: `{key}`\n⏳ Valid for 7 days", parse_mode="Markdown")
 
 async def block_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -430,12 +467,8 @@ async def reset_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Key not found!")
         return
     
-    await context.bot.send_message(
-        ADMIN_ID, 
-        f"⚠️ *Reset Request*\n🔑 {key}\n📦 {key_data.get('loader', 'Unknown')}\n🕐 {get_india_time().strftime('%Y-%m-%d %H:%M:%S')} IST",
-        parse_mode="Markdown"
-    )
-    await update.message.reply_text(f"✅ Request sent to admin!\n🕐 {get_india_time().strftime('%H:%M:%S')} IST")
+    await context.bot.send_message(ADMIN_ID, f"⚠️ Reset Request\n🔑 {key}\n📦 {key_data.get('loader', 'Unknown')}")
+    await update.message.reply_text("✅ Request sent to admin!")
 
 async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -443,10 +476,10 @@ async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('awaiting_bulk_keys'):
-        await process_add_keys(update, context)
+    if context.user_data.get('awaiting_keys'):
+        await process_keys(update, context)
     else:
-        await update.message.reply_text("⚠️ Use /start or /help")
+        await update.message.reply_text("Use /start or /help")
 
 # ---------- MAIN ----------
 def main():
@@ -466,22 +499,17 @@ def main():
     
     # Callbacks
     app.add_handler(CallbackQueryHandler(get_key, pattern="^get_key$"))
-    app.add_handler(CallbackQueryHandler(show_durations, pattern="^loader_"))
-    app.add_handler(CallbackQueryHandler(no_key_handler, pattern="^noloader_"))
-    app.add_handler(CallbackQueryHandler(get_final_key, pattern="^dur_"))
-    app.add_handler(CallbackQueryHandler(add_key_admin, pattern="^add_key_admin$"))
+    app.add_handler(CallbackQueryHandler(add_key_menu, pattern="^add_key_menu$"))
+    app.add_handler(CallbackQueryHandler(add_key_to_loader, pattern="^add_loader_"))
+    app.add_handler(CallbackQueryHandler(show_user_durations, pattern="^get_loader_"))
+    app.add_handler(CallbackQueryHandler(no_loader_keys, pattern="^no_loader_"))
+    app.add_handler(CallbackQueryHandler(give_user_key, pattern="^user_dur_"))
     app.add_handler(CallbackQueryHandler(check_keys, pattern="^check_keys$"))
     app.add_handler(CallbackQueryHandler(back_start, pattern="^back_start$"))
     
     # Messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("🤖 Bot Started Successfully!")
+    print("🤖 Bot Started!")
     print(f"👑 Admin ID: {ADMIN_ID}")
-    print(f"🕐 India Time: {get_india_time().strftime('%Y-%m-%d %H:%M:%S')} IST")
-    print("✅ Send /start or /help on Telegram")
-    
-    app.run_polling(drop_pending_updates=True)
-
-if __name__ == "__main__":
-    main()
+   
