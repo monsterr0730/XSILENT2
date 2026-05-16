@@ -1,4 +1,3 @@
-
 import logging
 import random
 import string
@@ -47,60 +46,150 @@ def parse_duration(duration_str):
 def generate_referral_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
-# ---------- CHECK IF ADMIN ----------
+# ---------- CHECK ACCESS ----------
+def has_access(user_id):
+    user = users_col.find_one({"_id": user_id})
+    if not user:
+        return False
+    return user.get("access", False) or user.get("role") == "admin" or user_id == ADMIN_ID
+
 def is_admin(user_id):
     user = users_col.find_one({"_id": user_id})
-    return user and user.get("role") == "admin"
+    return user and (user.get("role") == "admin" or user_id == ADMIN_ID)
 
 # ---------- /start ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not users_col.find_one({"_id": user_id}):
-        role = "admin" if user_id == ADMIN_ID else "user"
-        users_col.insert_one({"_id": user_id, "role": role, "blocked": False})
+    
+    # Check if user exists
+    user = users_col.find_one({"_id": user_id})
+    if not user:
+        users_col.insert_one({"_id": user_id, "role": "user", "access": False, "blocked": False})
+    
+    # Check access
+    if not has_access(user_id):
+        await update.message.reply_text(
+            "❌ **Access Denied!**\n\n"
+            "You don't have permission to use this bot.\n"
+            "Contact admin to get access.\n\n"
+            f"👑 Admin: @Flame_AI_Support",
+            parse_mode="Markdown"
+        )
+        return
     
     keyboard = [[InlineKeyboardButton("🎮 Get Key", callback_data="get_key")]]
     
     if is_admin(user_id):
         keyboard.append([InlineKeyboardButton("➕ Add Key", callback_data="add_key_admin")])
         keyboard.append([InlineKeyboardButton("📊 Check Keys", callback_data="check_keys")])
-        keyboard.append([InlineKeyboardButton("👑 Make Admin", callback_data="make_admin")])
+        keyboard.append([InlineKeyboardButton("👑 Give Access", callback_data="give_access")])
+        keyboard.append([InlineKeyboardButton("🚫 Block User", callback_data="block_user")])
     
     await update.message.reply_text(
-        "🤖 **Loader Key Bot**\n\nClick 'Get Key'",
+        "🤖 **Loader Key Bot**\n\nClick 'Get Key' to get your key",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------- MAKE OTHER USER ADMIN ----------
-async def make_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- GIVE ACCESS PANEL ----------
+async def give_access_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     if not is_admin(update.effective_user.id):
-        await query.edit_message_text("❌ Only owner can make admin!")
+        await query.edit_message_text("❌ Admin only!")
         return
     
     await query.edit_message_text(
-        "👑 **Make Admin**\n\nSend user ID:\n`/addadmin USER_ID`\n\nExample: `/addadmin 123456789`",
+        "👑 **Give User Access**\n\n"
+        "Send user ID:\n"
+        "`/grant USER_ID`\n\n"
+        "Example: `/grant 123456789`\n\n"
+        "To remove access:\n"
+        "`/revoke USER_ID`",
         parse_mode="Markdown"
     )
 
-async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    if not is_admin(user_id) and user_id != ADMIN_ID:
-        await update.message.reply_text("❌ Only owner can make admin!")
+async def grant_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
         return
     
     if len(context.args) != 1:
-        await update.message.reply_text("Usage: /addadmin <user_id>")
+        await update.message.reply_text("Usage: `/grant USER_ID`", parse_mode="Markdown")
         return
     
     try:
-        new_admin_id = int(context.args[0])
-        users_col.update_one({"_id": new_admin_id}, {"$set": {"role": "admin"}}, upsert=True)
-        await update.message.reply_text(f"✅ User {new_admin_id} is now admin!")
+        user_id = int(context.args[0])
+        users_col.update_one({"_id": user_id}, {"$set": {"access": True, "role": "user"}}, upsert=True)
+        await update.message.reply_text(f"✅ User `{user_id}` now has access!", parse_mode="Markdown")
+    except:
+        await update.message.reply_text("❌ Invalid user ID!")
+
+async def revoke_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: `/revoke USER_ID`", parse_mode="Markdown")
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        users_col.update_one({"_id": user_id}, {"$set": {"access": False}})
+        await update.message.reply_text(f"✅ Access revoked for `{user_id}`!", parse_mode="Markdown")
+    except:
+        await update.message.reply_text("❌ Invalid user ID!")
+
+# ---------- BLOCK USER PANEL ----------
+async def block_user_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if not is_admin(update.effective_user.id):
+        await query.edit_message_text("❌ Admin only!")
+        return
+    
+    await query.edit_message_text(
+        "🚫 **Block User**\n\n"
+        "Send user ID:\n"
+        "`/blockuser USER_ID`\n\n"
+        "Example: `/blockuser 123456789`\n\n"
+        "To unblock:\n"
+        "`/unblockuser USER_ID`",
+        parse_mode="Markdown"
+    )
+
+async def block_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: `/blockuser USER_ID`", parse_mode="Markdown")
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        users_col.update_one({"_id": user_id}, {"$set": {"blocked": True, "access": False}})
+        await update.message.reply_text(f"✅ User `{user_id}` blocked!", parse_mode="Markdown")
+    except:
+        await update.message.reply_text("❌ Invalid user ID!")
+
+async def unblock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: `/unblockuser USER_ID`", parse_mode="Markdown")
+        return
+    
+    try:
+        user_id = int(context.args[0])
+        users_col.update_one({"_id": user_id}, {"$set": {"blocked": False}})
+        await update.message.reply_text(f"✅ User `{user_id}` unblocked!", parse_mode="Markdown")
     except:
         await update.message.reply_text("❌ Invalid user ID!")
 
@@ -110,8 +199,12 @@ async def get_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user_id = update.effective_user.id
-    user = users_col.find_one({"_id": user_id})
     
+    if not has_access(user_id):
+        await query.edit_message_text("❌ Access Denied! Contact admin.")
+        return
+    
+    user = users_col.find_one({"_id": user_id})
     if user and user.get("blocked", False):
         await query.edit_message_text("❌ You are blocked! Contact admin.")
         return
@@ -140,6 +233,11 @@ async def no_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_durations(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    user_id = update.effective_user.id
+    if not has_access(user_id):
+        await query.edit_message_text("❌ Access Denied!")
+        return
     
     loader_idx = int(query.data.split('_')[1])
     loader_name = LOADERS[loader_idx]
@@ -171,8 +269,12 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     user_id = update.effective_user.id
-    user = users_col.find_one({"_id": user_id})
     
+    if not has_access(user_id):
+        await query.edit_message_text("❌ Access Denied!")
+        return
+    
+    user = users_col.find_one({"_id": user_id})
     if user and user.get("blocked", False):
         await query.edit_message_text("❌ You are blocked!")
         return
@@ -200,7 +302,7 @@ async def get_final_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Get Another", callback_data="get_key")]])
     )
 
-# ---------- ADD KEY (ADMIN) - BULK SUPPORT ----------
+# ---------- ADD KEY (ADMIN) - BULK ----------
 async def add_key_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -279,93 +381,6 @@ async def process_add_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text("❌ Invalid format! Use: `loader | duration | key1,key2,key3`", parse_mode="Markdown")
 
-# ---------- CREATE REFERRAL ----------
-async def create_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: `/create referral NAME`", parse_mode="Markdown")
-        return
-    
-    name = context.args[0]
-    code = generate_referral_code()
-    
-    referrals_col.insert_one({
-        "code": code, "name": name, "created_by": update.effective_user.id,
-        "created_at": datetime.now(), "redeemed_by": None, "blocked": False
-    })
-    
-    await update.message.reply_text(
-        f"✅ **Referral Created!**\n\n"
-        f"📛 Name: {name}\n"
-        f"🔗 Code: `{code}`\n\n"
-        f"Share: `/redeem {code}`",
-        parse_mode="Markdown"
-    )
-
-# ---------- REDEEM REFERRAL ----------
-async def redeem_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: `/redeem CODE`", parse_mode="Markdown")
-        return
-    
-    code = context.args[0]
-    ref = referrals_col.find_one({"code": code, "redeemed_by": None})
-    
-    if not ref:
-        await update.message.reply_text("❌ Invalid or already redeemed!")
-        return
-    
-    if ref.get("blocked", False):
-        await update.message.reply_text("❌ This referral is blocked!")
-        return
-    
-    referrals_col.update_one({"code": code}, {"$set": {"redeemed_by": update.effective_user.id, "redeemed_at": datetime.now()}})
-    
-    # Give 7-day free key as reward
-    expiry = datetime.now() + timedelta(days=7)
-    key = f"REF-{generate_referral_code()}"
-    
-    keys_col.insert_one({
-        "key": key, "loader": "REFERRAL REWARD", "duration": "7d",
-        "expiry": expiry, "used": False, "used_by": None,
-        "created_by": update.effective_user.id, "created_at": datetime.now()
-    })
-    
-    await update.message.reply_text(
-        f"🎉 **Referral Redeemed!**\n\n"
-        f"📛 Name: {ref['name']}\n"
-        f"🔑 Your reward key: `{key}`\n"
-        f"⏳ Valid for 7 days",
-        parse_mode="Markdown"
-    )
-
-# ---------- BLOCK REFERRAL ----------
-async def block_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("❌ Admin only!")
-        return
-    
-    if len(context.args) != 1:
-        await update.message.reply_text("Usage: `/block referral CODE`\nOr: `/block user USER_ID`", parse_mode="Markdown")
-        return
-    
-    target = context.args[0]
-    
-    # Block by referral code
-    if len(target) == 6 and target.isalnum():
-        result = referrals_col.update_one({"code": target}, {"$set": {"blocked": True}})
-        if result.modified_count:
-            await update.message.reply_text(f"✅ Referral `{target}` blocked!")
-        else:
-            await update.message.reply_text("❌ Referral not found!")
-    else:
-        # Block user by ID
-        try:
-            user_id = int(target)
-            users_col.update_one({"_id": user_id}, {"$set": {"blocked": True}}, upsert=True)
-            await update.message.reply_text(f"✅ User `{user_id}` blocked!")
-        except:
-            await update.message.reply_text("❌ Invalid code or user ID!")
-
 # ---------- CHECK KEYS (ADMIN) ----------
 async def check_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -386,7 +401,10 @@ async def check_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             message += f"❌ {loader}: 0\n"
     
-    message += f"\n📊 **Total Available:** {total}"
+    # Show users with access
+    users_with_access = users_col.count_documents({"access": True})
+    message += f"\n👥 **Users with access:** {users_with_access}"
+    message += f"\n📊 **Total Available Keys:** {total}"
     
     await query.edit_message_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back", callback_data="back_start")]]))
 
@@ -405,6 +423,83 @@ async def reset_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(ADMIN_ID, f"⚠️ Reset Request\n🔑 `{key}`\n📦 {key_data.get('loader', 'Unknown')}", parse_mode="Markdown")
     await update.message.reply_text("✅ Request sent!")
 
+# ---------- REFERRAL ----------
+async def create_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not has_access(update.effective_user.id):
+        await update.message.reply_text("❌ Access Denied!")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: `/create NAME`", parse_mode="Markdown")
+        return
+    
+    name = context.args[0]
+    code = generate_referral_code()
+    
+    referrals_col.insert_one({
+        "code": code, "name": name, "created_by": update.effective_user.id,
+        "created_at": datetime.now(), "redeemed_by": None, "blocked": False
+    })
+    
+    await update.message.reply_text(
+        f"✅ **Referral Created!**\n\n📛 Name: {name}\n🔗 Code: `{code}`\n\nShare: `/redeem {code}`",
+        parse_mode="Markdown"
+    )
+
+async def redeem_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not has_access(update.effective_user.id):
+        await update.message.reply_text("❌ Access Denied!")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: `/redeem CODE`", parse_mode="Markdown")
+        return
+    
+    code = context.args[0]
+    ref = referrals_col.find_one({"code": code, "redeemed_by": None})
+    
+    if not ref:
+        await update.message.reply_text("❌ Invalid or already redeemed!")
+        return
+    
+    if ref.get("blocked", False):
+        await update.message.reply_text("❌ This referral is blocked!")
+        return
+    
+    referrals_col.update_one({"code": code}, {"$set": {"redeemed_by": update.effective_user.id, "redeemed_at": datetime.now()}})
+    
+    # Give 7-day free key
+    expiry = datetime.now() + timedelta(days=7)
+    key = f"REF-{generate_referral_code()}"
+    
+    keys_col.insert_one({
+        "key": key, "loader": "REFERRAL REWARD", "duration": "7d",
+        "expiry": expiry, "used": False, "used_by": None,
+        "created_by": update.effective_user.id, "created_at": datetime.now()
+    })
+    
+    await update.message.reply_text(
+        f"🎉 **Referral Redeemed!**\n\n📛 Name: {ref['name']}\n🔑 Your key: `{key}`\n⏳ Valid for 7 days",
+        parse_mode="Markdown"
+    )
+
+async def block_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only!")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text("Usage: `/blockref CODE`", parse_mode="Markdown")
+        return
+    
+    code = context.args[0]
+    result = referrals_col.update_one({"code": code}, {"$set": {"blocked": True}})
+    
+    if result.modified_count:
+        await update.message.reply_text(f"✅ Referral `{code}` blocked!")
+    else:
+        await update.message.reply_text("❌ Referral not found!")
+
 async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -414,7 +509,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('awaiting_bulk_keys'):
         await process_add_keys(update, context)
     else:
-        await update.message.reply_text("⚠️ Use /start")
+        if not has_access(update.effective_user.id):
+            await update.message.reply_text("❌ Access Denied! Contact @Flame_AI_Support")
+        else:
+            await update.message.reply_text("⚠️ Use /start")
 
 # ---------- MAIN ----------
 def main():
@@ -422,24 +520,9 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset_key))
-    app.add_handler(CommandHandler("addadmin", add_admin))
+    app.add_handler(CommandHandler("grant", grant_access))
+    app.add_handler(CommandHandler("revoke", revoke_access))
+    app.add_handler(CommandHandler("blockuser", block_user))
+    app.add_handler(CommandHandler("unblockuser", unblock_user))
     app.add_handler(CommandHandler("create", create_referral))
-    app.add_handler(CommandHandler("redeem", redeem_referral))
-    app.add_handler(CommandHandler("block", block_referral))
-    
-    app.add_handler(CallbackQueryHandler(get_key, pattern="^get_key$"))
-    app.add_handler(CallbackQueryHandler(show_durations, pattern="^loader_"))
-    app.add_handler(CallbackQueryHandler(no_key_handler, pattern="^noloader_"))
-    app.add_handler(CallbackQueryHandler(get_final_key, pattern="^dur_"))
-    app.add_handler(CallbackQueryHandler(add_key_admin, pattern="^add_key_admin$"))
-    app.add_handler(CallbackQueryHandler(check_keys, pattern="^check_keys$"))
-    app.add_handler(CallbackQueryHandler(make_admin_panel, pattern="^make_admin$"))
-    app.add_handler(CallbackQueryHandler(back_start, pattern="^back_start$"))
-    
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("🤖 Bot Started!")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+    app.add_handle
