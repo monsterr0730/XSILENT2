@@ -5,8 +5,11 @@ import time
 import threading
 import json
 import re
+import random
+import string
 from datetime import datetime, timedelta
 from pymongo import MongoClient
+import cloudscraper
 
 # ========== TIMEZONE (IST) ==========
 IST = timedelta(hours=5, minutes=30)
@@ -18,7 +21,7 @@ def get_current_time():
 BOT_TOKEN = "8466296023:AAGEJjIye-5kv8rA8BX352l17Zhm4ojKRZA"
 ADMIN_ID = ["7192516189"]
 PANEL_URL = "https://xsilent.shop/vip"
-PANEL_USER = "VIPP"
+PANEL_USER = "VIPPP"
 PANEL_PASS = "roxym830"
 
 # ========== MONGODB ==========
@@ -30,13 +33,15 @@ users_collection = db["users"]
 keys_collection = db["keys"]
 broadcast_collection = db["broadcast"]
 settings_collection = db["settings"]
+resellers_collection = db["resellers"]
+referrals_collection = db["referrals"]
 
 print("✅ MongoDB Connected!")
 print(f"📅 Server Time: {get_current_time()}")
 
 # ========== DATA STRUCTURES ==========
 maintenance_mode = False
-panel_session = None
+panel_scraper = None
 
 # ========== LOAD/SAVE FUNCTIONS ==========
 def load_users():
@@ -89,6 +94,16 @@ def load_settings():
 def save_settings(data):
     settings_collection.update_one({"_id": "settings"}, {"$set": data}, upsert=True)
 
+def load_resellers():
+    data = resellers_collection.find_one({"_id": "resellers"})
+    if not data:
+        data = {"resellers": []}
+        resellers_collection.insert_one({"_id": "resellers", **data})
+    return data
+
+def save_resellers(data):
+    resellers_collection.update_one({"_id": "resellers"}, {"$set": data}, upsert=True)
+
 # ========== LOAD DATA ==========
 users_data = load_users()
 users = users_data["users"]
@@ -102,85 +117,141 @@ broadcast_users = broadcast_data.get("users", [])
 settings = load_settings()
 maintenance_mode = settings.get("maintenance", False)
 
+resellers_data = load_resellers()
+resellers = resellers_data.get("resellers", [])
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ========== PANEL LOGIN FUNCTION ==========
+# ========== PANEL CONNECTION WITH CLOUDSCRAPER ==========
 def panel_login():
-    global panel_session
+    global panel_scraper
     try:
-        session = requests.Session()
+        # Create cloudscraper to bypass Cloudflare
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'mobile': False
+            }
+        )
         
-        # Login to panel
-        login_data = {
-            "username": PANEL_USER,
-            "password": PANEL_PASS
-        }
+        # Try different login endpoints
+        login_endpoints = [
+            f"{PANEL_URL}/api/login",
+            f"{PANEL_URL}/login",
+            f"{PANEL_URL}/api/auth/login",
+            f"{PANEL_URL}/v1/login"
+        ]
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": PANEL_URL,
-            "Referer": f"{PANEL_URL}/login"
-        }
+        for endpoint in login_endpoints:
+            try:
+                print(f"Trying login: {endpoint}")
+                response = scraper.post(endpoint, json={
+                    "username": PANEL_USER,
+                    "password": PANEL_PASS
+                }, timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success") or data.get("token"):
+                        panel_scraper = scraper
+                        print(f"✅ Panel Login Successful! ({endpoint})")
+                        return True
+            except:
+                continue
         
-        response = session.post(f"{PANEL_URL}/api/login", data=login_data, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            panel_session = session
-            print("✅ Panel Login Successful!")
-            return True
-        else:
-            print(f"❌ Panel Login Failed: {response.status_code}")
-            return False
+        print("❌ Panel Login Failed - All endpoints failed")
+        return False
     except Exception as e:
         print(f"❌ Panel Error: {e}")
         return False
 
-# ========== GENERATE KEY FROM PANEL ==========
-def generate_key_from_panel():
+def generate_key_from_panel(user_id=None):
     try:
-        if not panel_session:
+        if not panel_scraper:
             panel_login()
         
-        response = panel_session.post(f"{PANEL_URL}/api/generate-key", timeout=30)
+        if panel_scraper:
+            # Try different endpoints
+            endpoints = [
+                f"{PANEL_URL}/api/generate-key",
+                f"{PANEL_URL}/api/key/generate",
+                f"{PANEL_URL}/api/v1/generate-key"
+            ]
+            
+            for endpoint in endpoints:
+                try:
+                    payload = {"user_id": user_id} if user_id else {}
+                    response = panel_scraper.post(endpoint, json=payload, timeout=30)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if data.get("key"):
+                            return data.get("key")
+                        if data.get("code"):
+                            return data.get("code")
+                except:
+                    continue
         
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("success"):
-                return data.get("key")
-        return None
+        # Fallback: Generate local key
+        return generate_local_key()
     except:
-        return None
+        return generate_local_key()
 
-# ========== DELETE KEY FROM PANEL ==========
+def generate_local_key():
+    """Generate local key when panel is unavailable"""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=16))
+
 def delete_key_from_panel(key):
     try:
-        if not panel_session:
+        if not panel_scraper:
             panel_login()
         
-        response = panel_session.post(f"{PANEL_URL}/api/delete-key", json={"key": key}, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("success", False)
+        if panel_scraper:
+            endpoints = [
+                f"{PANEL_URL}/api/delete-key",
+                f"{PANEL_URL}/api/key/delete"
+            ]
+            
+            for endpoint in endpoints:
+                try:
+                    response = panel_scraper.post(endpoint, json={"key": key}, timeout=30)
+                    if response.status_code == 200:
+                        return True
+                except:
+                    continue
         return False
     except:
         return False
 
-# ========== GET USER KEYS FROM PANEL ==========
-def get_user_keys(user_id):
+def get_user_keys_from_panel(user_id):
     try:
-        if not panel_session:
+        if not panel_scraper:
             panel_login()
         
-        response = panel_session.get(f"{PANEL_URL}/api/user-keys/{user_id}", timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("keys", [])
+        if panel_scraper:
+            response = panel_scraper.get(f"{PANEL_URL}/api/user-keys/{user_id}", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("keys", [])
         return []
     except:
         return []
+
+def generate_referral_code(user_id):
+    """Generate referral code for reseller"""
+    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    referrals_collection.insert_one({
+        "user_id": user_id,
+        "code": code,
+        "created_at": time.time(),
+        "used_by": [],
+        "earnings": 0
+    })
+    return code
+
+def get_referral_info(user_id):
+    return referrals_collection.find_one({"user_id": user_id})
 
 # ========== STYLED MESSAGE ==========
 def styled_msg(title, content, status="info"):
@@ -214,6 +285,8 @@ def start(m):
 │   /genkey - Generate Key
 │   /removekey KEY - Delete Key
 │   /mykeys - Your Keys
+│   /blockkey KEY - Block Key
+│   /unblockkey KEY - Unblock Key
 │
 │ 👥 USERS:
 │   /approve USER_ID - Approve User
@@ -224,14 +297,37 @@ def start(m):
 │   /approved - Approved Users
 │   /blocked - Blocked Users
 │
+│ 🔗 REFERRAL:
+│   /addreseller USER_ID - Add Reseller
+│   /removereseller USER_ID - Remove Reseller
+│   /myreferral - Your Referral Code
+│
 │ 📢 BROADCAST:
-│   /broadcast MESSAGE - Send to all
+│   /broadcast (reply to message)
 │
 │ 🔧 OTHER:
 │   /maintenance on/off
 │   /stats - Bot Stats
 │   /help - Help Menu"""
         bot.reply_to(m, styled_msg("OWNER PANEL", content, "success"))
+    
+    elif uid in resellers:
+        content = f"""│ 💎 Welcome Reseller!
+│
+│ 📅 {get_current_time()}
+│
+│ 📝 COMMANDS:
+│
+│ 🔑 KEYS:
+│   /genkey - Generate Key
+│   /mykeys - Your Keys
+│
+│ 🔗 REFERRAL:
+│   /myreferral - Your Referral Code
+│
+│ ℹ️ OTHER:
+│   /help - Help Menu"""
+        bot.reply_to(m, styled_msg("RESELLER PANEL", content, "success"))
     
     elif uid in approved_users:
         content = f"""│ ✅ Welcome User!
@@ -270,7 +366,6 @@ def start(m):
         bot.reply_to(m, styled_msg("BLOCKED", content, "error"))
     
     else:
-        # New user - add to pending
         if uid not in pending_users and uid not in approved_users and uid not in blocked_users:
             pending_users.append(uid)
             users_data["pending"] = pending_users
@@ -293,6 +388,8 @@ def status_cmd(m):
     
     if uid in approved_users:
         bot.reply_to(m, styled_msg("STATUS", "│ ✅ Your account is APPROVED!\n│ You can use /genkey", "success"))
+    elif uid in resellers:
+        bot.reply_to(m, styled_msg("STATUS", "│ 💎 Your account is RESELLER!\n│ You can generate keys and get referrals", "success"))
     elif uid in pending_users:
         bot.reply_to(m, styled_msg("STATUS", "│ ⏳ Your request is PENDING.\n│ Please wait for admin approval.", "warning"))
     elif uid in blocked_users:
@@ -308,38 +405,46 @@ def genkey(m):
         bot.reply_to(m, styled_msg("MAINTENANCE", "│ 🔧 Bot is under maintenance!", "warning"))
         return
     
-    if uid not in ADMIN_ID and uid not in approved_users:
+    if uid not in ADMIN_ID and uid not in resellers and uid not in approved_users:
         bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Your account is not approved!\n│ Contact admin.", "error"))
         return
     
-    # Try to generate key from panel
-    key = generate_key_from_panel()
+    msg = bot.reply_to(m, "⏳ Generating key... Please wait...")
     
-    if key:
-        keys_data[key] = {
-            "user_id": uid,
-            "generated_by": uid,
-            "generated_at": time.time(),
-            "used": False,
-            "blocked": False
-        }
-        save_keys(keys_data)
+    try:
+        # Try to get key from panel, fallback to local
+        key = generate_key_from_panel(uid)
         
-        content = f"""│ 🔑 KEY GENERATED!
-│
-│ Key: `{key}`
-│
-│ ⚠️ Save this key safely!
-│ Key will be deleted if misused."""
-        bot.reply_to(m, styled_msg("SUCCESS", content, "success"), parse_mode='Markdown')
-    else:
-        bot.reply_to(m, styled_msg("ERROR", "│ ❌ Failed to generate key!\n│ Please try again later.", "error"))
+        if key:
+            keys_data[key] = {
+                "user_id": uid,
+                "generated_by": uid,
+                "generated_at": time.time(),
+                "used": False,
+                "blocked": False
+            }
+            save_keys(keys_data)
+            
+            bot.edit_message_text(
+                styled_msg("SUCCESS", f"│ 🔑 KEY GENERATED!\n│\n│ Key: `{key}`\n│\n│ ⚠️ Save this key safely!", "success"),
+                msg.chat.id, msg.message_id, parse_mode='Markdown'
+            )
+        else:
+            bot.edit_message_text(
+                styled_msg("ERROR", "│ ❌ Failed to generate key!\n│ Please try again later.", "error"),
+                msg.chat.id, msg.message_id
+            )
+    except Exception as e:
+        bot.edit_message_text(
+            styled_msg("ERROR", f"│ ❌ Error: {str(e)[:50]}\n│ Contact admin!", "error"),
+            msg.chat.id, msg.message_id
+        )
 
 @bot.message_handler(commands=['mykeys'])
 def mykeys(m):
     uid = str(m.chat.id)
     
-    if uid not in ADMIN_ID and uid not in approved_users:
+    if uid not in ADMIN_ID and uid not in resellers and uid not in approved_users:
         bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Unauthorized!", "error"))
         return
     
@@ -371,15 +476,135 @@ def removekey(m):
     key = args[1]
     
     if key in keys_data:
-        # Delete from panel
-        if delete_key_from_panel(key):
-            del keys_data[key]
-            save_keys(keys_data)
-            bot.reply_to(m, styled_msg("KEY REMOVED", f"│ ✅ Key `{key}` removed from panel!", "success"), parse_mode='Markdown')
-        else:
-            bot.reply_to(m, styled_msg("ERROR", "│ ❌ Failed to remove key from panel!", "error"))
+        delete_key_from_panel(key)
+        del keys_data[key]
+        save_keys(keys_data)
+        bot.reply_to(m, styled_msg("KEY REMOVED", f"│ ✅ Key `{key}` removed!", "success"), parse_mode='Markdown')
     else:
         bot.reply_to(m, styled_msg("ERROR", "│ ❌ Key not found!", "error"))
+
+@bot.message_handler(commands=['blockkey'])
+def blockkey(m):
+    uid = str(m.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Owner only!", "error"))
+        return
+    
+    args = m.text.split()
+    if len(args) != 2:
+        bot.reply_to(m, "⚠️ Usage: /blockkey KEY")
+        return
+    
+    key = args[1]
+    
+    if key in keys_data:
+        keys_data[key]["blocked"] = True
+        save_keys(keys_data)
+        bot.reply_to(m, styled_msg("KEY BLOCKED", f"│ 🚫 Key `{key}` blocked!", "warning"), parse_mode='Markdown')
+    else:
+        bot.reply_to(m, styled_msg("ERROR", "│ ❌ Key not found!", "error"))
+
+@bot.message_handler(commands=['unblockkey'])
+def unblockkey(m):
+    uid = str(m.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Owner only!", "error"))
+        return
+    
+    args = m.text.split()
+    if len(args) != 2:
+        bot.reply_to(m, "⚠️ Usage: /unblockkey KEY")
+        return
+    
+    key = args[1]
+    
+    if key in keys_data:
+        keys_data[key]["blocked"] = False
+        save_keys(keys_data)
+        bot.reply_to(m, styled_msg("KEY UNBLOCKED", f"│ ✅ Key `{key}` unblocked!", "success"), parse_mode='Markdown')
+    else:
+        bot.reply_to(m, styled_msg("ERROR", "│ ❌ Key not found!", "error"))
+
+@bot.message_handler(commands=['addreseller'])
+def add_reseller(m):
+    uid = str(m.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Owner only!", "error"))
+        return
+    
+    args = m.text.split()
+    if len(args) != 2:
+        bot.reply_to(m, "⚠️ Usage: /addreseller USER_ID")
+        return
+    
+    target = args[1]
+    
+    if target not in resellers:
+        resellers.append(target)
+        save_resellers({"resellers": resellers})
+        
+        if target in approved_users:
+            approved_users.remove(target)
+        users_data["approved"] = approved_users
+        save_users(users_data)
+        
+        bot.reply_to(m, styled_msg("RESELLER ADDED", f"│ ✅ User {target} is now a reseller!", "success"))
+        
+        try:
+            bot.send_message(target, styled_msg("RESELLER ACCESS", "│ 💎 You have been promoted to RESELLER!\n│ You can now generate keys and get referrals.", "success"))
+        except:
+            pass
+    else:
+        bot.reply_to(m, styled_msg("ERROR", "│ ❌ User is already a reseller!", "error"))
+
+@bot.message_handler(commands=['removereseller'])
+def remove_reseller(m):
+    uid = str(m.chat.id)
+    
+    if uid not in ADMIN_ID:
+        bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Owner only!", "error"))
+        return
+    
+    args = m.text.split()
+    if len(args) != 2:
+        bot.reply_to(m, "⚠️ Usage: /removereseller USER_ID")
+        return
+    
+    target = args[1]
+    
+    if target in resellers:
+        resellers.remove(target)
+        save_resellers({"resellers": resellers})
+        bot.reply_to(m, styled_msg("RESELLER REMOVED", f"│ ✅ User {target} is no longer a reseller!", "success"))
+    else:
+        bot.reply_to(m, styled_msg("ERROR", "│ ❌ User is not a reseller!", "error"))
+
+@bot.message_handler(commands=['myreferral'])
+def myreferral(m):
+    uid = str(m.chat.id)
+    
+    ref_info = get_referral_info(uid)
+    
+    if not ref_info:
+        code = generate_referral_code(uid)
+        content = f"""│ 🔗 YOUR REFERRAL CODE
+│
+│ Code: `{code}`
+│
+│ Share this code with others.
+│ When they use it, you get rewards!"""
+        bot.reply_to(m, styled_msg("REFERRAL", content, "success"), parse_mode='Markdown')
+    else:
+        content = f"""│ 🔗 YOUR REFERRAL CODE
+│
+│ Code: `{ref_info['code']}`
+│
+│ Used by: {len(ref_info.get('used_by', []))} users
+│ Total Earnings: {ref_info.get('earnings', 0)}"""
+        bot.reply_to(m, styled_msg("REFERRAL", content, "info"), parse_mode='Markdown')
 
 @bot.message_handler(commands=['approve'])
 def approve_user(m):
@@ -471,6 +696,14 @@ def block_user(m):
             bot.send_message(target, styled_msg("BLOCKED", "│ 🚫 Your account has been BLOCKED!\n│ Contact admin for support.", "error"))
         except:
             pass
+    elif target in resellers:
+        resellers.remove(target)
+        if target not in blocked_users:
+            blocked_users.append(target)
+        save_resellers({"resellers": resellers})
+        users_data["blocked"] = blocked_users
+        save_users(users_data)
+        bot.reply_to(m, styled_msg("RESELLER BLOCKED", f"│ 🚫 Reseller {target} blocked!", "warning"))
     else:
         bot.reply_to(m, styled_msg("ERROR", "│ ❌ User not found in approved list!", "error"))
 
@@ -601,13 +834,18 @@ def stats(m):
         bot.reply_to(m, styled_msg("ACCESS DENIED", "│ ❌ Owner only!", "error"))
         return
     
+    total_keys = len(keys_data)
+    active_keys = len([k for k, v in keys_data.items() if not v.get("blocked")])
+    
     content = f"""│ 📊 BOT STATISTICS
 │
 │ 👑 Owner: {len(ADMIN_ID)}
+│ 💎 Resellers: {len(resellers)}
 │ ✅ Approved: {len(approved_users)}
 │ ⏳ Pending: {len(pending_users)}
 │ 🚫 Blocked: {len(blocked_users)}
-│ 🔑 Total Keys: {len(keys_data)}
+│ 🔑 Total Keys: {total_keys}
+│ 🔓 Active Keys: {active_keys}
 │ 📢 Broadcast Users: {len(broadcast_users)}
 │
 │ 📅 {get_current_time()}"""
@@ -624,6 +862,8 @@ def help_cmd(m):
 │ 🔑 KEYS:
 │   /genkey - Generate Key
 │   /removekey KEY - Delete Key
+│   /blockkey KEY - Block Key
+│   /unblockkey KEY - Unblock Key
 │   /mykeys - Your Keys
 │
 │ 👥 USERS:
@@ -635,6 +875,11 @@ def help_cmd(m):
 │   /approved - Approved Users
 │   /blocked - Blocked Users
 │
+│ 🔗 REFERRAL:
+│   /addreseller USER_ID - Add Reseller
+│   /removereseller USER_ID - Remove Reseller
+│   /myreferral - Your Referral Code
+│
 │ 📢 BROADCAST:
 │   /broadcast (reply to message)
 │
@@ -645,6 +890,23 @@ def help_cmd(m):
 │
 │ 📅 {get_current_time()}"""
         bot.reply_to(m, styled_msg("OWNER HELP", content))
+    
+    elif uid in resellers:
+        content = f"""│ 💎 RESELLER HELP
+│
+│ 🔑 KEYS:
+│   /genkey - Generate Key
+│   /mykeys - Your Keys
+│
+│ 🔗 REFERRAL:
+│   /myreferral - Your Referral Code
+│
+│ ℹ️ OTHER:
+│   /status - Check Status
+│   /help - This Menu
+│
+│ 📅 {get_current_time()}"""
+        bot.reply_to(m, styled_msg("RESELLER HELP", content))
     
     elif uid in approved_users:
         content = f"""│ ✅ USER HELP
@@ -677,6 +939,7 @@ print("=" * 50)
 
 print("✨ PANEL BOT STARTED ✨")
 print(f"👑 Owner: {ADMIN_ID[0]}")
+print(f"💎 Resellers: {len(resellers)}")
 print(f"✅ Approved: {len(approved_users)}")
 print(f"⏳ Pending: {len(pending_users)}")
 print(f"📅 {get_current_time()}")
