@@ -21,7 +21,7 @@ def get_current_time():
 BOT_TOKEN = "8466296023:AAGEJjIye-5kv8rA8BX352l17Zhm4ojKRZA"
 ADMIN_ID = ["7192516189"]
 PANEL_URL = "https://xsilent.shop/vip"
-PANEL_USER = "VIPPP"
+PANEL_USER = "VIPP"
 PANEL_PASS = "roxym830"
 
 # ========== MONGODB ==========
