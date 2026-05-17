@@ -1,370 +1,688 @@
-import asyncio
+import os
 import re
+import json
+import sqlite3
+import asyncio
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+import cloudscraper
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from pymongo import MongoClient
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import undetected_chromedriver as uc
-import time
-import threading
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler,
+    filters, ContextTypes, ConversationHandler
+)
 
-# ============= CONFIG =============
-BOT_TOKEN = "8466296023:AAGgTRre3Y_NL7kvNAvDsdomJo6-p_1Vu80"
-OWNER_ID = 7192516189
-MONGODB_URI = "mongodb+srv://mohitrao83076_db_user:LugF1xwlenkWRE1F@monster.ydmmckl.mongodb.net/?retryWrites=true&w=majority&appName=MONSTER"
+# ================= CONFIGURATION =================
+BOT_TOKEN = "8466296023:AAGEJjIye-5kv8rA8BX352l17Zhm4ojKRZA"          # Get from @BotFather
+OWNER_ID = 7192516189                       # Your Telegram user ID
+ADMIN_IDS = [7192516189]                    # List of admin user IDs
 
-# ============= DATABASE =============
+# Panel credentials (replace with actual)
+PANEL_URL = "https://xsilent.shop/vip"
+PANEL_USER = "VIPP"
+PANEL_PASS = "roxym830"
+
+# Database file
+DB_FILE = "monster_bot.db"
+
+# Conversation states for broadcasting
+BROADCAST_STATE = 1
+
+# ================= DATABASE (SQLite) =================
 class Database:
-    def __init__(self):
-        self.client = MongoClient(MONGODB_URI)
-        self.db = self.client["monster_bot"]
-        self.users = self.db.users
-        
-    def add_user(self, user_id, username, first_name):
-        if not self.users.find_one({"user_id": user_id}):
-            self.users.insert_one({
-                "user_id": user_id,
-                "username": username,
-                "first_name": first_name,
-                "approved": user_id == OWNER_ID,
-                "join_date": datetime.now().isoformat()
-            })
-    
-    def is_approved(self, user_id):
-        user = self.users.find_one({"user_id": user_id})
-        return user.get("approved", False) if user else False
-    
-    def approve_user(self, user_id):
-        self.users.update_one({"user_id": user_id}, {"$set": {"approved": True}})
+    def __init__(self, db_file: str):
+        self.conn = sqlite3.connect(db_file, check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self._create_tables()
 
-db = Database()
+    def _create_tables(self):
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                approved BOOLEAN DEFAULT 0,
+                is_admin BOOLEAN DEFAULT 0,
+                join_date TEXT,
+                total_keys INTEGER DEFAULT 0,
+                referred_by INTEGER DEFAULT NULL,
+                balance REAL DEFAULT 0
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS keys (
+                key_id TEXT PRIMARY KEY,
+                duration TEXT,
+                generated_for INTEGER,
+                generated_by INTEGER,
+                generated_date TEXT,
+                status TEXT DEFAULT 'active'
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                duration TEXT,
+                request_date TEXT,
+                status TEXT DEFAULT 'pending'
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS broadcasts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message TEXT,
+                sent_by INTEGER,
+                sent_date TEXT,
+                total_received INTEGER
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER,
+                referred_id INTEGER,
+                reward_given INTEGER DEFAULT 0,
+                date TEXT
+            )
+        ''')
+        self.conn.commit()
 
-# ============= SELENIUM PANEL (BYPASS CLOUDFLARE) =============
-class PanelBot:
-    def __init__(self):
-        self.driver = None
-        self.lock = threading.Lock()
-        
-    def get_driver(self):
-        """Get or create driver instance"""
-        if self.driver is None:
-            options = uc.ChromeOptions()
-            options.add_argument('--headless=new')  # Background mein chale ga
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--window-size=1920,1080')
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0')
-            
-            self.driver = uc.Chrome(options=options)
-            self.driver.implicitly_wait(10)
-        return self.driver
-    
-    def generate_key(self, duration):
-        """Generate key using real browser"""
-        with self.lock:
-            try:
-                driver = self.get_driver()
-                
-                # Duration mapping
-                duration_map = {
-                    '5h': '5 Hours',
-                    '3d': '3 Days',
-                    '7d': '7 Days',
-                    '14d': '14 Days',
-                    '30d': '30 Days',
-                    '60d': '60 Days'
-                }
-                duration_text = duration_map.get(duration, duration)
-                
-                print(f"🔄 Opening panel...")
-                driver.get('https://xsilent.shop/vip/login')
-                time.sleep(5)  # Wait for Cloudflare
-                
-                # Login
-                print("🔐 Logging in...")
-                wait = WebDriverWait(driver, 20)
-                
-                # Find username field
-                username_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[name='username'], input[type='text']")))
-                username_input.clear()
-                username_input.send_keys('VIPKEY')
-                
-                # Find password field
-                password_input = driver.find_element(By.CSS_SELECTOR, "input[name='password'], input[type='password']")
-                password_input.clear()
-                password_input.send_keys('roxym830')
-                
-                # Find and click login button
-                login_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
-                login_btn.click()
-                
-                time.sleep(5)
-                
-                # Click menu (three lines)
-                print("📁 Opening menu...")
-                menu_selectors = [
-                    "button.navbar-toggler",
-                    ".menu-toggle",
-                    "i.fa-bars",
-                    "svg[class*='menu']",
-                    "button[class*='menu']"
-                ]
-                
-                for selector in menu_selectors:
-                    try:
-                        menu = driver.find_element(By.CSS_SELECTOR, selector)
-                        menu.click()
-                        time.sleep(1)
-                        break
-                    except:
-                        continue
-                
-                # Click Generate option
-                print("⚙️ Going to generate...")
-                gen_selectors = [
-                    "a[href*='generate']",
-                    "button:contains('Generate')",
-                    "span:contains('Generate')",
-                    "div:contains('Generate')"
-                ]
-                
-                for selector in gen_selectors:
-                    try:
-                        if 'contains' in selector:
-                            elem = driver.find_element(By.XPATH, f"//*[contains(text(), 'Generate')]")
-                        else:
-                            elem = driver.find_element(By.CSS_SELECTOR, selector)
-                        elem.click()
-                        time.sleep(2)
-                        break
-                    except:
-                        continue
-                
-                # Select duration
-                print(f"⏰ Selecting {duration_text}...")
-                duration_selectors = [
-                    f"button:contains('{duration_text}')",
-                    f"span:contains('{duration_text}')",
-                    f"option[value='{duration}']",
-                    f"input[value='{duration}']"
-                ]
-                
-                for selector in duration_selectors:
-                    try:
-                        if 'contains' in selector:
-                            elem = driver.find_element(By.XPATH, f"//*[contains(text(), '{duration_text}')]")
-                        else:
-                            elem = driver.find_element(By.CSS_SELECTOR, selector)
-                        elem.click()
-                        time.sleep(1)
-                        break
-                    except:
-                        continue
-                
-                # Set max devices (default 1)
-                try:
-                    device_input = driver.find_element(By.CSS_SELECTOR, "input[name='max_devices'], input[type='number']")
-                    device_input.clear()
-                    device_input.send_keys('1')
-                except:
-                    pass
-                
-                # Click generate button
-                print("🔑 Generating key...")
-                gen_btn_selectors = [
-                    "button:contains('Generate')",
-                    "button:contains('Create')",
-                    "button[type='submit']",
-                    "input[value='Generate']"
-                ]
-                
-                for selector in gen_btn_selectors:
-                    try:
-                        if 'contains' in selector:
-                            btn = driver.find_element(By.XPATH, f"//*[contains(text(), 'Generate') or contains(text(), 'Create')]")
-                        else:
-                            btn = driver.find_element(By.CSS_SELECTOR, selector)
-                        btn.click()
-                        time.sleep(3)
-                        break
-                    except:
-                        continue
-                
-                # Extract key from page
-                page_source = driver.page_source
-                
-                # Key patterns
-                patterns = [
-                    r'[A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12}',
-                    r'[A-Z0-9]{16,32}',
-                    r'<code>([^<]+)</code>',
-                    r'class="key"[^>]*>([^<]+)<',
-                    r'value="([A-Z0-9\-]{16,})"'
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, page_source, re.IGNORECASE)
-                    if match:
-                        key = match.group(1) if match.groups() else match.group(0)
-                        if len(key) >= 8:
-                            print(f"✅ Key found: {key}")
-                            return key
-                
-                print("❌ No key found in page")
-                return None
-                
-            except Exception as e:
-                print(f"❌ Error: {e}")
-                return None
-    
+    # ---------------- User management ----------------
+    def add_user(self, user_id: int, username: str, first_name: str, referred_by: int = None):
+        if not self.get_user(user_id):
+            is_admin = user_id == OWNER_ID or user_id in ADMIN_IDS
+            self.cursor.execute('''
+                INSERT INTO users (user_id, username, first_name, approved, is_admin, join_date, referred_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, username, first_name, is_admin, is_admin, datetime.now().isoformat(), referred_by))
+            self.conn.commit()
+            if referred_by and referred_by != user_id:
+                self.add_referral(referred_by, user_id)
+
+    def get_user(self, user_id: int):
+        self.cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        return self.cursor.fetchone()
+
+    def approve_user(self, user_id: int):
+        self.cursor.execute("UPDATE users SET approved = 1 WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+
+    def is_approved(self, user_id: int) -> bool:
+        user = self.get_user(user_id)
+        return user[3] == 1 if user else False
+
+    def is_admin(self, user_id: int) -> bool:
+        user = self.get_user(user_id)
+        return user[4] == 1 if user else (user_id == OWNER_ID or user_id in ADMIN_IDS)
+
+    def get_all_users(self):
+        self.cursor.execute("SELECT user_id, username, first_name, approved FROM users")
+        return self.cursor.fetchall()
+
+    def get_approved_users(self) -> List[int]:
+        self.cursor.execute("SELECT user_id FROM users WHERE approved = 1")
+        return [row[0] for row in self.cursor.fetchall()]
+
+    # ---------------- Key management ----------------
+    def save_key(self, key_id: str, duration: str, generated_for: int, generated_by: int):
+        self.cursor.execute('''
+            INSERT INTO keys (key_id, duration, generated_for, generated_by, generated_date)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (key_id, duration, generated_for, generated_by, datetime.now().isoformat()))
+        self.cursor.execute("UPDATE users SET total_keys = total_keys + 1 WHERE user_id = ?", (generated_for,))
+        self.conn.commit()
+
+    def get_user_keys(self, user_id: int):
+        self.cursor.execute("SELECT key_id, duration, status, generated_date FROM keys WHERE generated_for = ? ORDER BY generated_date DESC", (user_id,))
+        return self.cursor.fetchall()
+
+    def get_key(self, key_id: str):
+        self.cursor.execute("SELECT * FROM keys WHERE key_id = ?", (key_id,))
+        return self.cursor.fetchone()
+
+    def update_key_status(self, key_id: str, status: str):
+        self.cursor.execute("UPDATE keys SET status = ? WHERE key_id = ?", (status, key_id))
+        self.conn.commit()
+
+    def delete_key(self, key_id: str):
+        self.cursor.execute("DELETE FROM keys WHERE key_id = ?", (key_id,))
+        self.conn.commit()
+
+    # ---------------- Request management ----------------
+    def add_request(self, user_id: int, duration: str):
+        self.cursor.execute('''
+            INSERT INTO requests (user_id, duration, request_date)
+            VALUES (?, ?, ?)
+        ''', (user_id, duration, datetime.now().isoformat()))
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def get_pending_requests(self):
+        self.cursor.execute('''
+            SELECT r.id, r.user_id, u.username, u.first_name, r.duration, r.request_date
+            FROM requests r JOIN users u ON r.user_id = u.user_id
+            WHERE r.status = 'pending' ORDER BY r.request_date DESC
+        ''')
+        return self.cursor.fetchall()
+
+    def update_request_status(self, request_id: int, status: str):
+        self.cursor.execute("UPDATE requests SET status = ? WHERE id = ?", (status, request_id))
+        self.conn.commit()
+
+    # ---------------- Broadcast ----------------
+    def save_broadcast(self, message: str, sent_by: int, total_received: int):
+        self.cursor.execute('''
+            INSERT INTO broadcasts (message, sent_by, sent_date, total_received)
+            VALUES (?, ?, ?, ?)
+        ''', (message, sent_by, datetime.now().isoformat(), total_received))
+        self.conn.commit()
+
+    # ---------------- Referral ----------------
+    def add_referral(self, referrer_id: int, referred_id: int):
+        if not self.cursor.execute("SELECT 1 FROM referrals WHERE referred_id = ?", (referred_id,)).fetchone():
+            self.cursor.execute('''
+                INSERT INTO referrals (referrer_id, referred_id, date)
+                VALUES (?, ?, ?)
+            ''', (referrer_id, referred_id, datetime.now().isoformat()))
+            # Give 5 credits reward
+            self.cursor.execute("UPDATE users SET balance = balance + 5 WHERE user_id = ?", (referrer_id,))
+            self.conn.commit()
+            return True
+        return False
+
+    def get_referral_count(self, user_id: int) -> int:
+        self.cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,))
+        return self.cursor.fetchone()[0]
+
     def close(self):
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
+        self.conn.close()
 
-panel = PanelBot()
+# ================= PANEL COMMUNICATION =================
+class PanelClient:
+    def __init__(self, base_url: str, username: str, password: str):
+        self.base_url = base_url
+        self.username = username
+        self.password = password
+        self.scraper = cloudscraper.create_scraper(
+            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True},
+            delay=15,
+            interpret=True
+        )
+        self.logged_in = False
 
-# ============= BOT HANDLERS =============
+    def _login(self) -> bool:
+        """Attempt to log in to the panel and bypass Cloudflare."""
+        try:
+            # 1. Get login page to retrieve CSRF token
+            resp = self.scraper.get(f"{self.base_url}/login")
+            if resp.status_code != 200:
+                return False
+
+            # Extract CSRF token (adjust regex based on actual panel)
+            csrf_token = None
+            match = re.search(r'name="_token"\s+value="([^"]+)"', resp.text)
+            if match:
+                csrf_token = match.group(1)
+            elif re.search(r'csrf-token" content="([^"]+)"', resp.text):
+                csrf_token = re.search(r'csrf-token" content="([^"]+)"', resp.text).group(1)
+
+            # 2. Perform login
+            login_data = {
+                'username': self.username,
+                'password': self.password,
+                '_token': csrf_token or ''
+            }
+            login_resp = self.scraper.post(f"{self.base_url}/login", data=login_data)
+
+            # Check for success indicators
+            if login_resp.status_code == 200 and ('dashboard' in login_resp.text.lower() or 'logout' in login_resp.text.lower()):
+                self.logged_in = True
+                return True
+            return False
+        except Exception as e:
+            print(f"Login error: {e}")
+            return False
+
+    def generate_key(self, duration: str) -> Optional[str]:
+        """Generate a new key from the panel. Returns key string or None."""
+        if not self.logged_in and not self._login():
+            return None
+
+        try:
+            # Convert friendly duration to panel's expected format (customize as needed)
+            duration_map = {
+                '5h': '5_hours', '3d': '3_days', '7d': '7_days',
+                '14d': '14_days', '30d': '30_days', '60d': '60_days'
+            }
+            payload = {'duration': duration_map.get(duration, duration), 'max_devices': 1}
+            # Try POST to /generate endpoint
+            resp = self.scraper.post(f"{self.base_url}/generate", data=payload)
+            if resp.status_code == 200:
+                # Attempt to extract key from JSON or HTML
+                try:
+                    data = resp.json()
+                    return data.get('key') or data.get('license') or data.get('code')
+                except:
+                    # Search HTML for key patterns
+                    patterns = [
+                        r'([A-F0-9]{8}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{12})',
+                        r'([A-Z0-9]{16,32})',
+                        r'<code>(.+?)</code>'
+                    ]
+                    for pattern in patterns:
+                        match = re.search(pattern, resp.text, re.IGNORECASE)
+                        if match:
+                            return match.group(1)
+            return None
+        except Exception as e:
+            print(f"Key generation error: {e}")
+            return None
+
+    def delete_key(self, key_id: str) -> bool:
+        """Delete/revoke a key from the panel."""
+        if not self.logged_in and not self._login():
+            return False
+        try:
+            # Adjust endpoint as needed
+            resp = self.scraper.post(f"{self.base_url}/key/delete", data={'key_id': key_id})
+            return resp.status_code == 200 and 'success' in resp.text.lower()
+        except Exception as e:
+            print(f"Delete key error: {e}")
+            return False
+
+    def block_key(self, key_id: str) -> bool:
+        """Block a key."""
+        if not self.logged_in and not self._login():
+            return False
+        try:
+            resp = self.scraper.post(f"{self.base_url}/key/block", data={'key_id': key_id})
+            return resp.status_code == 200 and 'success' in resp.text.lower()
+        except Exception as e:
+            print(f"Block key error: {e}")
+            return False
+
+# ================= TELEGRAM BOT =================
+db = Database(DB_FILE)
+panel = PanelClient(PANEL_URL, PANEL_USER, PANEL_PASS)
+
+# ---------- Helper functions ----------
+def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("🔑 Generate Key", callback_data="generate_menu")],
+        [InlineKeyboardButton("📜 My Keys", callback_data="my_keys")],
+        [InlineKeyboardButton("👥 Referral", callback_data="referral")],
+        [InlineKeyboardButton("❓ Help", callback_data="help")]
+    ]
+    if db.is_admin(user_id):
+        keyboard.append([InlineKeyboardButton("⚙️ Admin Panel", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(keyboard)
+
+# ---------- User commands ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    db.add_user(user.id, user.username, user.first_name)
-    
+    referred_by = context.args[0] if context.args else None
+    if referred_by:
+        try:
+            referred_by = int(referred_by)
+        except:
+            referred_by = None
+
+    db.add_user(user.id, user.username, user.first_name, referred_by)
+
+    welcome_text = (
+        f"🎉 Welcome {user.first_name}!\n\n"
+        f"This bot helps you generate license keys from the panel.\n"
+        f"Status: {'✅ Approved' if db.is_approved(user.id) else '⏳ Pending approval'}\n\n"
+        f"Use the buttons below to interact."
+    )
+    await update.message.reply_text(welcome_text, reply_markup=get_main_keyboard(user.id))
+
+async def request_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if db.is_approved(user.id):
+        await update.message.reply_text("You are already approved!")
+        return
+
+    # Add request to database
+    db.add_request(user.id, "full_access")
+
+    # Notify all admins
+    for admin_id in ADMIN_IDS + [OWNER_ID]:
+        try:
+            await context.bot.send_message(
+                admin_id,
+                f"🆕 Access request from {user.first_name} (@{user.username})\nID: `{user.id}`\n"
+                f"Use /approve {user.id} to grant access.",
+                parse_mode='Markdown'
+            )
+        except:
+            pass
+
+    await update.message.reply_text("✅ Request sent to admin. You'll be notified once approved.")
+
+async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ You are not authorized to approve users.")
+        return
+
+    try:
+        user_id = int(context.args[0])
+    except:
+        await update.message.reply_text("Usage: /approve <user_id>")
+        return
+
+    db.approve_user(user_id)
+    await update.message.reply_text(f"✅ User {user_id} approved.")
+    try:
+        await context.bot.send_message(user_id, "✅ Congratulations! Your access has been approved. Use /start to generate keys.")
+    except:
+        pass
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📚 *Help*\n\n"
+        "/start - Show main menu\n"
+        "/request - Request access to use the bot\n"
+        "/help - Show this message\n\n"
+        "*Generating keys:*\n"
+        "1. Use the 'Generate Key' button\n"
+        "2. Choose duration\n"
+        "3. Your key will appear\n\n"
+        "*Admin commands:*\n"
+        "/approve <user_id> - Approve a user\n"
+        "/broadcast - Send message to all approved users\n"
+        "/addkey <duration> <key> - Manually add a key (backup)\n"
+        "/delkey <key_id> - Delete a key from panel\n"
+        "/blockkey <key_id> - Block a key"
+    )
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+# ---------- Callback handlers ----------
+async def generate_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if not db.is_approved(query.from_user.id):
+        await query.edit_message_text("❌ You are not approved. Use /request to get access.")
+        return
+
     keyboard = [
         [InlineKeyboardButton("⏰ 5 Hours", callback_data="gen_5h")],
         [InlineKeyboardButton("📅 3 Days", callback_data="gen_3d")],
         [InlineKeyboardButton("📆 7 Days", callback_data="gen_7d")],
         [InlineKeyboardButton("📊 14 Days", callback_data="gen_14d")],
         [InlineKeyboardButton("🌟 30 Days", callback_data="gen_30d")],
-        [InlineKeyboardButton("💎 60 Days", callback_data="gen_60d")]
+        [InlineKeyboardButton("💎 60 Days", callback_data="gen_60d")],
+        [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
     ]
-    
-    if user.id == OWNER_ID:
-        keyboard.append([InlineKeyboardButton("🔧 Status", callback_data="status")])
-    
-    status = "✅" if db.is_approved(user.id) else "⏳ Pending"
-    
-    await update.message.reply_text(
-        f"🔥 *XSILENT VIP KEY GENERATOR* 🔥\n\n"
-        f"👋 Hello {user.first_name}!\n"
-        f"📌 Status: {status}\n\n"
-        f"👇 Select duration:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("🔑 Select key duration:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def generate_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def generate_key_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    duration = query.data.replace("gen_", "")
+
+    duration = query.data.split('_')[1]
     user_id = query.from_user.id
-    
-    if not db.is_approved(user_id) and user_id != OWNER_ID:
-        await query.message.edit_text("❌ Not approved! Send /request")
-        return
-    
-    duration_names = {
-        '5h': '5 Hours', '3d': '3 Days', '7d': '7 Days',
-        '14d': '14 Days', '30d': '30 Days', '60d': '60 Days'
-    }
-    
-    msg = await query.message.edit_text(
-        f"🔄 *Generating {duration_names[duration]} Key...*\n\n"
-        f"⏳ Opening browser...\n"
-        f"🔐 Bypassing Cloudflare...\n"
-        f"🔑 Generating license...\n\n"
-        f"*Please wait 30-40 seconds*",
-        parse_mode='Markdown'
-    )
-    
-    # Run in thread to avoid blocking
-    key = await asyncio.to_thread(panel.generate_key, duration)
-    
+    duration_names = {'5h':'5 Hours', '3d':'3 Days', '7d':'7 Days', '14d':'14 Days', '30d':'30 Days', '60d':'60 Days'}
+    name = duration_names[duration]
+
+    msg = await query.edit_message_text(f"🔄 Generating {name} key...\nPlease wait ⏳")
+
+    # Attempt to generate key from panel
+    key = panel.generate_key(duration)
+
     if key:
+        db.save_key(key, name, user_id, user_id)
         await msg.edit_text(
-            f"✅ *KEY GENERATED SUCCESSFULLY!*\n\n"
-            f"🎫 *Duration:* {duration_names[duration]}\n"
-            f"🔑 *Your Key:*\n"
-            f"`{key}`\n\n"
-            f"⚠️ Valid for {duration_names[duration]} only!\n"
-            f"📋 Copy and use in XSilent app.",
-            parse_mode='Markdown'
+            f"✅ *Key generated successfully!*\n\n"
+            f"🎫 *Duration:* {name}\n"
+            f"🔑 `{key}`\n\n"
+            f"⚠️ Valid for {name} only.",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]])
         )
     else:
         await msg.edit_text(
-            f"❌ *Generation Failed!*\n\n"
-            f"Duration: {duration_names[duration]}\n\n"
-            f"Reasons:\n"
-            f"• Cloudflare blocking\n"
-            f"• Panel structure changed\n"
-            f"• Try again in 2 minutes\n\n"
-            f"Contact @admin for help.",
-            parse_mode='Markdown'
+            f"❌ Failed to generate {name} key.\n"
+            f"The panel might be blocking the request. Please try again later or contact admin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]])
         )
 
-async def panel_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def my_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    await query.message.edit_text(
-        f"🔧 *Panel Status*\n\n"
-        f"🤖 Browser: Ready\n"
-        f"☁️ Cloudflare: Bypass Active\n"
-        f"🔑 Key Gen: Working\n\n"
-        f"✅ Bot is using real browser\n"
-        f"✅ Can bypass any protection\n\n"
-        f"*Note:* Takes 30-40 seconds per key",
+    user_id = query.from_user.id
+    keys = db.get_user_keys(user_id)
+
+    if not keys:
+        await query.edit_message_text("📭 You have no keys yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]]))
+        return
+
+    text = "🔑 *Your keys:*\n\n"
+    for k_id, dur, status, date in keys[:10]:
+        status_emoji = "✅" if status == "active" else "❌"
+        text += f"{status_emoji} `{k_id}` – {dur} (generated {date[:10]})\n"
+
+    if len(keys) > 10:
+        text += f"\n... and {len(keys)-10} more."
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]]))
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    bot_username = (await context.bot.get_me()).username
+    link = f"https://t.me/{bot_username}?start={user_id}"
+    count = db.get_referral_count(user_id)
+    text = (
+        f"👥 *Referral program*\n\n"
+        f"Share your link and earn 5 credits per referral!\n\n"
+        f"🔗 `{link}`\n\n"
+        f"📊 Referrals: {count}\n"
+        f"💰 Balance: {db.get_user(user_id)[7] if db.get_user(user_id) else 0} credits"
+    )
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]]))
+
+# ---------- Admin panel ----------
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not db.is_admin(query.from_user.id):
+        await query.edit_message_text("❌ Admin access only.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("👥 Pending Approvals", callback_data="admin_approvals")],
+        [InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("🔑 Manage Keys", callback_data="admin_manage_keys")],
+        [InlineKeyboardButton("📊 Stats", callback_data="admin_stats")],
+        [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]
+    ]
+    await query.edit_message_text("⚙️ *Admin Panel*", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+async def admin_approvals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pending = db.get_pending_requests()
+    if not pending:
+        await query.edit_message_text("No pending approvals.")
+        return
+
+    for req in pending:
+        req_id, uid, username, first_name, duration, date = req
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Approve", callback_data=f"approve_user_{uid}")],
+            [InlineKeyboardButton("❌ Reject", callback_data=f"reject_req_{req_id}")]
+        ])
+        await query.message.reply_text(
+            f"Request from {first_name} (@{username})\nID: `{uid}`\nDate: {date[:10]}",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+    await query.delete_message()
+
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("📢 Send the message you want to broadcast to all approved users.\n\nType /cancel to abort.")
+    return BROADCAST_STATE
+
+async def broadcast_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "/cancel":
+        await update.message.reply_text("Broadcast cancelled.")
+        return ConversationHandler.END
+
+    message = update.message.text
+    users = db.get_approved_users()
+    sent = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(uid, f"📢 *Announcement*\n\n{message}", parse_mode='Markdown')
+            sent += 1
+            await asyncio.sleep(0.05)
+        except:
+            pass
+    db.save_broadcast(message, update.effective_user.id, sent)
+    await update.message.reply_text(f"✅ Broadcast sent to {sent} users.")
+    return ConversationHandler.END
+
+async def admin_manage_keys(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    # Simple list of keys (can be extended)
+    keys = db.cursor.execute("SELECT key_id, status FROM keys LIMIT 20").fetchall()
+    if not keys:
+        await query.edit_message_text("No keys in database.")
+        return
+    text = "🔑 *Keys in DB:*\n"
+    for key_id, status in keys:
+        text += f"`{key_id}` – {status}\n"
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_panel")]]))
+
+async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    total_users = len(db.get_all_users())
+    approved = len(db.get_approved_users())
+    total_keys = db.cursor.execute("SELECT COUNT(*) FROM keys").fetchone()[0]
+    active_keys = db.cursor.execute("SELECT COUNT(*) FROM keys WHERE status='active'").fetchone()[0]
+    text = (
+        f"📊 *Statistics*\n\n"
+        f"👥 Users: {total_users}\n"
+        f"✅ Approved: {approved}\n"
+        f"🔑 Total keys generated: {total_keys}\n"
+        f"🟢 Active keys: {active_keys}"
+    )
+    await query.edit_message_text(text, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_panel")]]))
+
+async def approve_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = int(query.data.split('_')[2])
+    db.approve_user(uid)
+    await query.message.edit_text(f"✅ User {uid} approved.")
+    try:
+        await context.bot.send_message(uid, "✅ Your access has been approved! Use /start to generate keys.")
+    except:
+        pass
+
+async def reject_request_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    req_id = int(query.data.split('_')[2])
+    db.update_request_status(req_id, 'rejected')
+    await query.message.edit_text(f"Request {req_id} rejected.")
+
+async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "🏠 *Main Menu*",
+        reply_markup=get_main_keyboard(query.from_user.id),
         parse_mode='Markdown'
     )
 
-async def request_access(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    
-    if db.is_approved(user.id):
-        await update.message.reply_text("✅ You are already approved!")
+# ---------- Manual key commands (admin) ----------
+async def add_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only.")
         return
-    
-    await update.message.reply_text("✅ Request sent to admin!")
-    await context.bot.send_message(OWNER_ID, f"🆕 Request from {user.first_name}\nID: {user.id}\n/approve {user.id}")
-
-async def approve_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Owner only!")
-        return
-    
     try:
-        uid = int(context.args[0])
-        db.approve_user(uid)
-        await update.message.reply_text(f"✅ User {uid} approved!")
-        await context.bot.send_message(uid, "✅ Approved! Use /start")
+        duration = context.args[0]
+        key_id = context.args[1]
+        user_id = update.effective_user.id
+        db.save_key(key_id, duration, user_id, user_id)
+        await update.message.reply_text(f"✅ Key `{key_id}` added to DB.", parse_mode='Markdown')
     except:
-        await update.message.reply_text("Usage: /approve user_id")
+        await update.message.reply_text("Usage: /addkey <duration> <key_id>")
 
-# ============= MAIN =============
+async def delete_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only.")
+        return
+    try:
+        key_id = context.args[0]
+        # Delete from panel
+        if panel.delete_key(key_id):
+            db.delete_key(key_id)
+            await update.message.reply_text(f"✅ Key `{key_id}` deleted from panel and DB.", parse_mode='Markdown')
+        else:
+            await update.message.reply_text(f"❌ Failed to delete key from panel.", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: /delkey <key_id>")
+
+async def block_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db.is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Admin only.")
+        return
+    try:
+        key_id = context.args[0]
+        if panel.block_key(key_id):
+            db.update_key_status(key_id, 'blocked')
+            await update.message.reply_text(f"✅ Key `{key_id}` blocked.", parse_mode='Markdown')
+        else:
+            await update.message.reply_text(f"❌ Failed to block key from panel.", parse_mode='Markdown')
+    except:
+        await update.message.reply_text("Usage: /blockkey <key_id>")
+
+# ================= MAIN =================
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    
+
+    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("request", request_access))
     app.add_handler(CommandHandler("approve", approve_user))
-    
-    app.add_handler(CallbackQueryHandler(generate_key, pattern="^gen_"))
-    app.add_handler(CallbackQueryHandler(panel_status, pattern="^status$"))
-    
-    print("=" * 50)
-    print("🤖 XSILENT KEY GENERATOR (SELENIUM MODE)")
-    print("=" * 50)
-    print("✅ Bot Running")
-    print("✅ Using Real Browser to Bypass Cloudflare")
-    print("⏳ Key generation takes 30-40 seconds")
-    print("=" * 50)
-    
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("addkey", add_key_command))
+    app.add_handler(CommandHandler("delkey", delete_key_command))
+    app.add_handler(CommandHandler("blockkey", block_key_command))
+
+    # Callback handlers
+    app.add_handler(CallbackQueryHandler(generate_menu, pattern="^generate_menu$"))
+    app.add_handler(CallbackQueryHandler(generate_key_callback, pattern="^gen_"))
+    app.add_handler(CallbackQueryHandler(my_keys, pattern="^my_keys$"))
+    app.add_handler(CallbackQueryHandler(referral, pattern="^referral$"))
+    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
+    app.add_handler(CallbackQueryHandler(admin_approvals, pattern="^admin_approvals$"))
+    app.add_handler(CallbackQueryHandler(admin_broadcast, pattern="^admin_broadcast$"))
+    app.add_handler(CallbackQueryHandler(admin_manage_keys, pattern="^admin_manage_keys$"))
+    app.add_handler(CallbackQueryHandler(admin_stats, pattern="^admin_stats$"))
+    app.add_handler(CallbackQueryHandler(approve_user_callback, pattern="^approve_user_"))
+    app.add_handler(CallbackQueryHandler(reject_request_callback, pattern="^reject_req_"))
+    app.add_handler(CallbackQueryHandler(main_menu, pattern="^main_menu$"))
+
+    # Conversation handler for broadcast
+    broadcast_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_broadcast, pattern="^admin_broadcast$")],
+        states={BROADCAST_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_receive)]},
+        fallbacks=[CommandHandler("cancel", lambda u,c: ConversationHandler.END)]
+    )
+    app.add_handler(broadcast_conv)
+
+    print("🤖 Bot started. Press Ctrl+C to stop.")
     app.run_polling()
 
 if __name__ == "__main__":
